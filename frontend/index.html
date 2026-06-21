@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>FutBot — AI Football Analyst</title>
+  <meta name="description" content="Ask anything about football. Powered by a multi-LLM RAG pipeline with live news retrieval." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+
+  <!-- ══════════════════════════ SIDEBAR ══════════════════════════ -->
+  <aside id="sidebar">
+    <div id="sidebar-header">
+      <div id="logo">
+        <span id="logo-icon">⚽</span>
+        <span id="logo-text">FutBot</span>
+      </div>
+      <p id="logo-sub">AI Football Analyst</p>
+    </div>
+
+    <div id="sidebar-actions">
+      <button id="new-chat-btn" class="sidebar-btn primary-btn" onclick="newSession()">
+        <span>＋</span> New Chat
+      </button>
+      <button id="ingest-btn" class="sidebar-btn secondary-btn" onclick="triggerIngest()">
+        <span id="ingest-icon">📡</span> <span id="ingest-label">Sync News</span>
+      </button>
+    </div>
+
+    <div id="ingest-status"></div>
+
+    <div id="sidebar-footer">
+      <div id="session-info">
+        <span class="label">Session</span>
+        <span id="session-id-display">—</span>
+      </div>
+      <div id="pipeline-info">
+        <span class="label">Pipeline</span>
+        <span class="pill">Orchestrator 0.8b</span>
+        <span class="pill">Generator 2b</span>
+        <span class="pill">Judge 4b</span>
+      </div>
+    </div>
+  </aside>
+
+  <!-- ══════════════════════════ MAIN CHAT ══════════════════════════ -->
+  <main id="chat-container">
+
+    <!-- Header -->
+    <header id="chat-header">
+      <div id="header-left">
+        <button id="mobile-menu-btn" onclick="toggleSidebar()">☰</button>
+        <h1 id="chat-title">Football AI</h1>
+      </div>
+      <div id="header-status">
+        <span id="status-dot" class="dot green"></span>
+        <span id="status-text">Ready</span>
+      </div>
+    </header>
+
+    <!-- Welcome screen shown when no messages -->
+    <div id="welcome-screen">
+      <div id="welcome-ball">⚽</div>
+      <h2 id="welcome-title">Ask anything about football</h2>
+      <p id="welcome-sub">I analyse the last 12 months of football news from BBC, The Guardian & Sky Sports using a multi-LLM hallucination-resistant pipeline.</p>
+      <div id="suggestion-chips">
+        <button class="chip" onclick="sendSuggestion('Who are the top scorers in the Premier League this season?')">🥅 Top scorers this season</button>
+        <button class="chip" onclick="sendSuggestion('What happened in the last El Clasico?')">⭐ Latest El Clasico result</button>
+        <button class="chip" onclick="sendSuggestion('Which teams are in the Champions League final?')">🏆 Champions League final</button>
+        <button class="chip" onclick="sendSuggestion('How is Erling Haaland performing this season?')">📈 Haaland this season</button>
+      </div>
+    </div>
+
+    <!-- Messages area -->
+    <div id="messages" aria-live="polite" aria-label="Chat messages"></div>
+
+    <!-- Input area -->
+    <div id="input-area">
+      <div id="input-wrapper">
+        <textarea
+          id="user-input"
+          placeholder="Ask about any football topic…"
+          rows="1"
+          autocomplete="off"
+          onkeydown="handleKey(event)"
+          oninput="autoResize(this)"
+        ></textarea>
+        <button id="send-btn" onclick="sendMessage()" aria-label="Send message" title="Send (Enter)">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+            <path d="M22 2L11 13M22 2L15 22 11 13M22 2L2 9l9 4"/>
+          </svg>
+        </button>
+      </div>
+      <p id="input-hint">Press <kbd>Enter</kbd> to send · <kbd>Shift+Enter</kbd> for new line</p>
+    </div>
+
+  </main>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
