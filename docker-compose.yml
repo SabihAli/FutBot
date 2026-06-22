@@ -5,6 +5,8 @@ services:
     build: .
     volumes:
       - .:/app
+    env_file:
+      - .env
     environment:
       - PYTHONPATH=/app
     command: pytest -v --cov=src --cov-report=term-missing
@@ -13,8 +15,14 @@ services:
     build: .
     volumes:
       - .:/app
+      - app_data:/app/data
+    env_file:
+      - .env
     environment:
       - PYTHONPATH=/app
     ports:
       - "8000:8000"
     command: uvicorn src.api:app --host 0.0.0.0 --port 8000 --reload
+
+volumes:
+  app_data:

@@ -6,3 +6,6 @@ __pycache__/
 .env
 *.csv
 .DS_Store
+db_dump.json
+trace_logs.db
+data/
