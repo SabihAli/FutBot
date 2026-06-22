@@ -24,25 +24,29 @@ global_bm25 = BM25Retriever()
 
 
 # ---------------------------------------------------------------------------
-# Startup: auto-ingest on boot
+# Startup
 # ---------------------------------------------------------------------------
-import asyncio
+@app.on_event("startup")
+def populate_db_on_startup():
+    """Load, chunk and index all articles automatically when the server boots.
+    If persistent data already exists on disk, skip ingestion entirely.
+    """
+    from src.retriever import BM25_PATH
+    already_have_chroma = global_chroma.count() > 0
+    already_have_bm25 = global_bm25.load()  # tries to load from disk
 
-async def background_ingest():
+    if already_have_chroma and already_have_bm25:
+        print(f"✅ Persistent index found: {global_chroma.count()} chunks in ChromaDB. Skipping ingestion.")
+        return
+
+    print("🔄 No persistent index found. Running ingestion (one-time, may take a few minutes)...")
     try:
-        # Run synchronous ingest_data in a threadpool so it doesn't block the event loop
-        res = await asyncio.to_thread(ingest_data)
+        res = ingest_data()
         n_arts = res.get("articles_ingested", 0)
         n_chunks = res.get("total_chunks_indexed", 0)
         print(f"✅ Ingestion complete: {n_arts} articles → {n_chunks} chunks indexed.")
     except Exception as e:
         print(f"⚠️  Ingestion failed on startup: {e}")
-
-@app.on_event("startup")
-def populate_db_on_startup():
-    """Scrape, chunk and index all articles automatically when the server boots."""
-    print("🔄 Starting automatic ingestion on boot in the background...")
-    asyncio.create_task(background_ingest())
 
 
 # ---------------------------------------------------------------------------
@@ -79,7 +83,7 @@ class SessionResponse(BaseModel):
 def ingest_data():
     """Load football articles from CSV, chunk them, and index into ChromaDB + BM25."""
     csv_path = os.path.join(os.path.dirname(__file__), "..", "final-articles.csv")
-    articles = load_csv(csv_path, days_back=365)
+    articles = load_csv(csv_path)
 
     if not articles:
         return {
@@ -90,6 +94,7 @@ def ingest_data():
         }
 
     all_chunk_texts: List[str] = []
+    bm25_texts: List[str] = []
     all_metadatas: List[Dict[str, str]] = []
 
     for art in articles:
@@ -98,6 +103,7 @@ def ingest_data():
         date_str = art.date_published.isoformat() if art.date_published else ""
         for chunk in chunks:
             all_chunk_texts.append(chunk)
+            bm25_texts.append(f"{art.title}\n{chunk}")
             all_metadatas.append({
                 "url": art.url,
                 "title": art.title,
@@ -109,7 +115,8 @@ def ingest_data():
 
     # Index into ChromaDB (dense) and BM25 (sparse)
     global_chroma.add_documents(chunk_ids, all_chunk_texts, all_metadatas)
-    global_bm25.build_index(all_chunk_texts, chunk_ids)
+    global_bm25.build_index(bm25_texts, chunk_ids)
+    global_bm25.save()  # persist BM25 to disk for future runs
 
     return {
         "status": "success",
