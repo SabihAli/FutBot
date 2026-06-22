@@ -9,9 +9,11 @@ from src.llm_components import (
     Orchestrator,
     DraftGenerator,
     DecisionJudge,
-    HeavyRefiner,
 )
 from src.retriever import reciprocal_rank_fusion
+from src.db_logger import log_pipeline_trace
+
+from src.prompt_loader import get_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +33,7 @@ class GraphState(TypedDict, total=False):
     judge_reasoning: str
     retry_count: int
     reached_max_retries: bool
+    loop_traces: List[Dict[str, Any]]
     
     final_answer: str
 
@@ -38,24 +41,29 @@ class GraphState(TypedDict, total=False):
 # ---------------------------------------------------------------------------
 # Nodes
 # ---------------------------------------------------------------------------
-def orchestrator_node(state: GraphState) -> GraphState:
-    classifier = Orchestrator()
-    classification = classifier.classify(state.get("query", ""))
-    return {"classification": classification}
-
-def simple_responder_node(state: GraphState) -> GraphState:
-    prompt = f"Respond naturally to this user greeting or simple statement:\n{state.get('query', '')}"
-    answer = invoke_llm(prompt, model_name=MODEL_GENERATOR)
-    return {"final_answer": answer}
-
 def rewrite_node(state: GraphState) -> GraphState:
     rewriter = QueryRewriter()
-    # On retries, we might want to modify the rewrite, but for now we keep it standard.
-    # Alternatively, the retry could just fetch different documents.
     query = state.get("query", "")
     context = state.get("context_messages", [])
     rewritten = rewriter.rewrite(query, context)
-    return {"rewritten_query": rewritten}
+    
+    traces = state.get("loop_traces", [])
+    # Start a new trace dict for this loop iteration
+    traces.append({"rewritten_query": rewritten})
+    
+    return {"rewritten_query": rewritten, "loop_traces": traces}
+
+def orchestrator_node(state: GraphState) -> GraphState:
+    classifier = Orchestrator()
+    classification = classifier.classify(state.get("rewritten_query", state.get("query", "")))
+    return {"classification": classification}
+
+def simple_responder_node(state: GraphState) -> GraphState:
+    prompt_template = get_prompt("SIMPLE_RESPONDER")
+    prompt = prompt_template.format(query=state.get("rewritten_query", state.get("query", "")))
+    answer = invoke_llm(prompt, model_name=MODEL_GENERATOR)
+    
+    return {"final_answer": answer}
 
 def retrieve_node(state: GraphState) -> GraphState:
     query = state.get("rewritten_query", "")
@@ -78,7 +86,12 @@ def retrieve_node(state: GraphState) -> GraphState:
         logger.error(f"Retrieval error: {e}")
         chunks = []
         
-    return {"retrieved_chunks": chunks}
+    chunk_ids = [c.get("chunk_id", "unknown") for c in chunks]
+    traces = state.get("loop_traces", [])
+    if traces:
+        traces[-1]["retrieved_chunk_ids"] = chunk_ids
+        
+    return {"retrieved_chunks": chunks, "loop_traces": traces}
 
 def draft_node(state: GraphState) -> GraphState:
     generator = DraftGenerator()
@@ -94,24 +107,23 @@ def judge_node(state: GraphState) -> GraphState:
     )
     
     current_retries = state.get("retry_count", 0)
-    return {
-        "judge_status": result.get("status", "FAIL"),
-        "judge_reasoning": result.get("reasoning", ""),
-        "retry_count": current_retries + 1
-    }
-
-def refine_node(state: GraphState) -> GraphState:
-    refiner = HeavyRefiner()
-    reached_max = state.get("judge_status") == "FAIL"
+    traces = state.get("loop_traces", [])
     
-    if reached_max:
-        draft = state.get("draft_answer", "I'm sorry, I couldn't find a confident answer in the retrieved documents.")
-    else:
-        draft = state.get("draft_answer", "")
+    status = result.get("status", "FAIL")
+    if traces:
+        traces[-1]["judge_status"] = status
+        traces[-1]["judge_reasoning"] = result.get("reasoning", "")
         
-    final = refiner.refine(state.get("query", ""), draft)
-    return {"final_answer": final, "reached_max_retries": reached_max}
-
+    reached_max = (status == "FAIL" and current_retries >= 2)
+        
+    return {
+        "judge_status": status,
+        "judge_reasoning": result.get("reasoning", ""),
+        "retry_count": current_retries + 1,
+        "loop_traces": traces,
+        "final_answer": state.get("draft_answer", ""),
+        "reached_max_retries": reached_max
+    }
 
 # ---------------------------------------------------------------------------
 # Conditional Edges
@@ -140,30 +152,30 @@ def build_graph():
     workflow = StateGraph(GraphState)
     
     # Add Nodes
+    workflow.add_node("rewriter", rewrite_node)
     workflow.add_node("orchestrator", orchestrator_node)
     workflow.add_node("simple_responder", simple_responder_node)
-    workflow.add_node("rewriter", rewrite_node)
     workflow.add_node("retriever", retrieve_node)
     workflow.add_node("drafter", draft_node)
     workflow.add_node("judge", judge_node)
-    workflow.add_node("refiner", refine_node)
     
-    # Entry Point
-    workflow.set_entry_point("orchestrator")
+    # Entry Point is now the rewriter
+    workflow.set_entry_point("rewriter")
     
     # Edges
+    workflow.add_edge("rewriter", "orchestrator")
+    
     workflow.add_conditional_edges(
         "orchestrator",
         route_after_orchestrator,
         {
             "simple": "simple_responder",
-            "knowledge": "rewriter"
+            "knowledge": "retriever"
         }
     )
     
     workflow.add_edge("simple_responder", END)
     
-    workflow.add_edge("rewriter", "retriever")
     workflow.add_edge("retriever", "drafter")
     workflow.add_edge("drafter", "judge")
     
@@ -171,13 +183,11 @@ def build_graph():
         "judge",
         route_after_judge,
         {
-            "pass": "refiner",
-            "max_retries": "refiner",
+            "pass": END,
+            "max_retries": END,
             "retry": "rewriter"  # Loop back to rewrite (or retrieve) if failed
         }
     )
-    
-    workflow.add_edge("refiner", END)
     
     # Compile
     return workflow.compile()
@@ -195,7 +205,8 @@ def run_pipeline(query: str, context_messages: Optional[List[Dict[str, str]]] = 
     initial_state: GraphState = {
         "query": query,
         "context_messages": context_messages,
-        "retry_count": 0
+        "retry_count": 0,
+        "loop_traces": []
     }
     
     # Run the graph
@@ -206,5 +217,17 @@ def run_pipeline(query: str, context_messages: Optional[List[Dict[str, str]]] = 
     # If we hit max retries without a PASS, append a user-visible warning
     if result.get("reached_max_retries"):
         answer += "\n\n⚠️ WARNING: No decisive answer was found in the available sources. This result should be independently verified."
+        
+    # Log the full trace to SQLite
+    try:
+        log_pipeline_trace(
+            original_query=query,
+            classification=result.get("classification", "UNKNOWN"),
+            total_iterations=result.get("retry_count", 0),
+            final_answer=answer,
+            loop_traces=result.get("loop_traces", [])
+        )
+    except Exception as e:
+        logger.error(f"Failed to log execution trace: {e}")
     
     return answer
