@@ -2,18 +2,26 @@ import json
 import logging
 import re
 import requests
+import os
 from typing import List, Dict, Any
+from dotenv import load_dotenv
+
+from src.prompt_loader import get_prompt
+
+# Load environment variables from .env file if it exists
+load_dotenv()
 
 logger = logging.getLogger(__name__)
 
-OLLAMA_API_URL = "https://e7a8-154-192-139-73.ngrok-free.app/api/generate"
+OLLAMA_API_URL = os.environ.get("OLLAMA_API_URL", "https://a3fc-154-192-5-123.ngrok-free.app/api/generate")
 
-# Model configurations as specified by the user
-MODEL_ORCHESTRATOR = "qwen3.5:0.8b"
-MODEL_GENERATOR = "qwen3.5:2b"
-MODEL_DECISION = "qwen3.5:4b"
+# Model configurations
+MODEL_ORCHESTRATOR = os.environ.get("MODEL_ORCHESTRATOR", "qwen3.5:0.8b")
+MODEL_GENERATOR = os.environ.get("MODEL_GENERATOR", "qwen3.5:2b")
+MODEL_DECISION = os.environ.get("MODEL_DECISION", "qwen3.5:4b")
 
 # Qwen3 models output <think>...</think> blocks before their actual response.
+
 # We must strip these to get the real answer.
 def _strip_think_tags(text: str) -> str:
     """Remove <think>...</think> reasoning blocks emitted by Qwen3 models."""
@@ -48,33 +56,17 @@ def invoke_llm(prompt: str, model_name: str) -> str:
         return ""
 
 
-
-
 class QueryRewriter:
     def rewrite(self, query: str, context_messages: List[Dict[str, str]]) -> str:
         history_text = "\n".join([f"{m['role']}: {m['content']}" for m in context_messages])
-        prompt = f"""Given the following conversation history and a new user query, rewrite the query to be fully self-contained. 
-If the user's query is already standalone, return it exactly as is. Do not answer the query.
-
-Conversation History:
-{history_text}
-
-User Query: {query}
-
-Rewritten Query:"""
+        prompt_template = get_prompt("REWRITER")
+        prompt = prompt_template.format(history_text=history_text, query=query)
         return invoke_llm(prompt, model_name=MODEL_GENERATOR)
 
 class Orchestrator:
     def classify(self, query: str) -> str:
-        prompt = f"""Classify the following user query into one of two categories:
-SIMPLE: Greetings, pleasantries, or generic statements that do not require football knowledge.
-KNOWLEDGE: Questions or statements requiring football facts, news, or history.
-
-Reply ONLY with the exact word SIMPLE or KNOWLEDGE.
-
-Query: {query}
-
-Classification:"""
+        prompt_template = get_prompt("ORCHESTRATOR")
+        prompt = prompt_template.format(query=query)
         classification = invoke_llm(prompt, model_name=MODEL_ORCHESTRATOR).upper()
         if "KNOWLEDGE" in classification:
             return "KNOWLEDGE"
@@ -83,39 +75,20 @@ Classification:"""
 class DraftGenerator:
     def generate(self, query: str, chunks: List[Dict[str, Any]]) -> str:
         context_text = "\n\n".join([f"Source [{c.get('chunk_id', 'unknown')}]:\n{c.get('document', '')}" for c in chunks])
-        prompt = f"""You are a football knowledge assistant. Using ONLY the context chunks below, write a clear and complete answer to the query.
-Do not invent facts. Do not use outside knowledge. Stick strictly to what is in the sources.
-If the context does not contain enough information, say: "The available sources do not contain enough information to answer this question."
-
-Context Chunks:
-{context_text}
-
-Query: {query}
-
-Answer (no preamble, answer directly):"""
+        prompt_template = get_prompt("DRAFT_GENERATOR")
+        prompt = prompt_template.format(context_text=context_text, query=query)
         return invoke_llm(prompt, model_name=MODEL_GENERATOR)
 
 class DecisionJudge:
     def evaluate(self, query: str, draft: str, chunks: List[Dict[str, Any]]) -> Dict[str, str]:
         context_text = "\n\n".join([c.get("document", "") for c in chunks])
-        prompt = f"""You are a fact-checking evaluator. Your job is to verify whether a draft answer is supported by the provided context.
-
-Rules:
-- PASS if the draft answer is mostly supported by the context, even if not word-for-word.
-- FAIL if the draft answer says the information is not available or cannot be found — this means retrieval failed and should be retried.
-- FAIL if the draft answer makes specific factual claims that directly contradict or are completely absent from the context.
-- Be LENIENT for partial answers. Prefer PASS over FAIL when there is genuine supporting evidence in the context.
-
-Respond with ONLY a JSON object. Example: {{"status": "PASS", "reasoning": "The answer is supported by the context."}}
-
-Context:
-{context_text}
-
-Query: {query}
-
-Draft Answer: {draft}
-
-JSON:"""
+        prompt_template = get_prompt("DECISION_JUDGE")
+        # To avoid KeyError for {{ and }}, the text file uses standard format. 
+        # Wait, the prompt contains {{ and }} which format requires! 
+        # I actually formatted it with double brackets in prompts.txt.
+        # But wait, python format() handles double brackets by reducing to single bracket.
+        prompt = prompt_template.format(context_text=context_text, query=query, draft=draft)
+        
         result = invoke_llm(prompt, model_name=MODEL_DECISION)
         try:
             # Try to extract JSON from anywhere in the response
@@ -128,15 +101,3 @@ JSON:"""
             # Default to PASS so we don't loop endlessly on small model JSON failures
             status = "FAIL" if "FAIL" in result.upper() and "PASS" not in result.upper() else "PASS"
             return {"status": status, "reasoning": "Fallback parsing applied."}
-
-class HeavyRefiner:
-    def refine(self, query: str, draft_answer: str) -> str:
-        prompt = f"""Polish the following draft answer. Fix grammar, improve clarity, and use Markdown formatting (bold key names, use bullet lists where appropriate).
-Do NOT add any new facts. Do NOT use phrases like "Refined Answer:", "Draft:", or "Journalist's response:". Start your response directly.
-
-Query: {query}
-
-Draft: {draft_answer}
-
-Polished response:"""
-        return invoke_llm(prompt, model_name=MODEL_GENERATOR)
