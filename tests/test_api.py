@@ -7,19 +7,17 @@ from src.data_layer import Article
 
 client = TestClient(app)
 
-
 @pytest.fixture(autouse=True)
 def clear_sessions_db():
     """Clear the in-memory session store before each test."""
     sessions_db.clear()
     yield
 
-
 # ---------------------------------------------------------------------------
 # POST /api/ingest
 # ---------------------------------------------------------------------------
 def test_ingest_endpoint(mocker):
-    # Mock scraper to return a real Article dataclass
+    # Mock load_csv to return a real Article dataclass
     fake_article = Article(
         title="Messi Wins Ballon d'Or Again",
         body="Lionel Messi claimed his record ninth Ballon d'Or award.",
@@ -27,11 +25,12 @@ def test_ingest_endpoint(mocker):
         source="bbc",
         date_published=datetime(2025, 10, 20, tzinfo=timezone.utc),
     )
-    mocker.patch("src.api.scrape_all", return_value=[fake_article])
+    mocker.patch("src.api.load_csv", return_value=[fake_article])
 
     # Mock the retrievers so we don't need real ChromaDB/BM25 in tests
     mocker.patch("src.api.global_chroma.add_documents")
     mocker.patch("src.api.global_bm25.build_index")
+    mocker.patch("src.api.global_bm25.save")
 
     # Mock chunk_text to return predictable chunks
     mocker.patch("src.api.chunk_text", return_value=["chunk one", "chunk two"])
@@ -45,7 +44,7 @@ def test_ingest_endpoint(mocker):
 
 
 def test_ingest_no_articles(mocker):
-    mocker.patch("src.api.scrape_all", return_value=[])
+    mocker.patch("src.api.load_csv", return_value=[])
 
     response = client.post("/api/ingest")
     assert response.status_code == 200

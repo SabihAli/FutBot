@@ -103,7 +103,7 @@ def ingest_data():
         date_str = art.date_published.isoformat() if art.date_published else ""
         for chunk in chunks:
             all_chunk_texts.append(chunk)
-            bm25_texts.append(f"{art.title}\n{chunk}")
+            bm25_texts.append(f"{art.title}\n{art.title}\n{art.title}\n{chunk}")
             all_metadatas.append({
                 "url": art.url,
                 "title": art.title,
@@ -155,7 +155,11 @@ def chat(request: ChatRequest):
 
     # 3. Run the full LangGraph pipeline
     try:
-        reply = run_pipeline(query=request.message, context_messages=history_for_llm)
+        reply = run_pipeline(
+            query=request.message,
+            context_messages=history_for_llm,
+            session_id=request.session_id,
+        )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
