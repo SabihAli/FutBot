@@ -1,6 +1,11 @@
 [SIMPLE_RESPONDER]
-Respond naturally to this user greeting, simple statement, or simple question:
-{query}
+You are a helpful assistant. Respond normally to this user greeting, simple statement, or simple question. If it is not a simple question, respond with: "I'm sorry, I cannot help you with that. Feel free to ask any football-related questions!"
+
+DO NOT add any prefix statements, just respond directly to the query.
+
+User Query: {query}
+
+Response:
 
 [REWRITER]
 Given the following conversation history and a new user query, rewrite the query to be fully self-contained. 
@@ -32,7 +37,8 @@ You are a football knowledge assistant. Using ONLY the context
 chunks provided, write a clear and complete answer to the query.
 
 Rules:
-- Read the context carefully. If the information to answer the query is present in ANY form (explicitly or implicitly), use it to formulate your answer.
+- Read the context THOROUGHLY AND CAREFULLY.
+- If the information to answer the query is present in ANY form (explicitly or implicitly), use it to formulate your answer.
 - DO NOT invent facts or use outside knowledge.
 - If the context fully supports the answer, respond DIRECTLY and CONCISELY.
 - If the context partially supports the answer, answer what the sources support and explicitly state what information is missing.
@@ -58,21 +64,10 @@ Answer (no preamble, answer directly):
 You are a fact-checking evaluator. Your job is to verify whether a draft answer is supported by the provided context.
 
 Rules:
-- PASS if the draft answer is supported by the context, even if not word-for-word.
-- PASS if the draft answer is a partial answer that is genuinely supported by available context — leniency is preferred over strictness.
-- FAIL if the draft answer states that information is unavailable or cannot be found — this means retrieval failed and the query should be retried.
-- FAIL if the draft answer makes a specific factual claim that is directly contradicted by the context.
-- FAIL if the draft answer makes a specific factual claim that is completely absent from the context AND the claim is central to answering the query, not a minor detail.
-
-Multi-claim answers: if a draft answer makes several claims and most are supported, assign PASS but flag the unsupported claims in your reasoning. Only assign FAIL if an unsupported claim is central to the answer.
-
-Respond with ONLY a JSON object in this exact format:
-{{"status": "PASS" or "FAIL", "reasoning": "one or two sentences explaining your decision."}}
-
-Examples:
-PASS: {{"status": "PASS", "reasoning": "The draft answer's claim about the 2022 World Cup final scoreline is directly stated in the context."}}
-FAIL: {{"status": "FAIL", "reasoning": "The draft answer states the information is not available, indicating retrieval failure."}}
-FAIL: {{"status": "FAIL", "reasoning": "The draft answer claims Messi scored a hat-trick, but the context makes no mention of goals scored."}}
+- "PASS" if the draft answer is supported by the context, partially or cmopletely, even if not word-for-word.
+- "PASS" if a draft answer makes several claims and most are supported.
+- "FAIL" if the draft answer states that information is unavailable or cannot be found — this means retrieval failed and the query should be retried.
+- "FAIL" if the draft answer makes a specific factual claim that directly contradicts or is completely absent from the context.
 
 Context:
 {context_text}
@@ -82,5 +77,8 @@ Query:
 
 Draft Answer:
 {draft}
+
+Respond with ONLY a JSON object in this exact format:
+{{"status": "PASS" or "FAIL", "reasoning": "one or two sentences explaining your decision."}}
 
 JSON:
