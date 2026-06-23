@@ -1,8 +1,10 @@
 import pytest
+import os
 from src.retriever import (
     ChromaRetriever,
     BM25Retriever,
     reciprocal_rank_fusion,
+    BM25_PATH
 )
 
 # ---------------------------------------------------------------------------
@@ -69,6 +71,31 @@ def test_bm25_returns_correct_top_k():
 
     results = retriever.search(query="player", top_k=3)
     assert len(results) == 3
+
+
+def test_bm25_save_and_load(tmp_path):
+    """BM25 index should serialize to disk and load back."""
+    save_path = str(tmp_path / "test_bm25.pkl")
+    
+    corpus = ["First document", "Second document", "Third document"]
+    chunk_ids = ["1", "2", "3"]
+    
+    retriever_save = BM25Retriever()
+    retriever_save.build_index(corpus=corpus, chunk_ids=chunk_ids)
+    retriever_save.save(path=save_path)
+    
+    assert os.path.exists(save_path)
+    
+    retriever_load = BM25Retriever()
+    assert not retriever_load.is_loaded()
+    
+    success = retriever_load.load(path=save_path)
+    assert success is True
+    assert retriever_load.is_loaded()
+    
+    results = retriever_load.search(query="Second", top_k=1)
+    assert len(results) == 1
+    assert results[0]["chunk_id"] == "2"
 
 
 # ---------------------------------------------------------------------------

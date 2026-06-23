@@ -4,9 +4,12 @@ import pickle
 import chromadb
 from chromadb.utils.embedding_functions import DefaultEmbeddingFunction
 from rank_bm25 import BM25Okapi
+import logging
+
+logger = logging.getLogger(__name__)
 
 # Directory where both ChromaDB and BM25 data are persisted
-DATA_DIR = os.environ.get("DATA_DIR", "/app/data")
+DATA_DIR = os.environ.get("DATA_DIR", "data")
 CHROMA_PATH = os.path.join(DATA_DIR, "chroma_db")
 BM25_PATH = os.path.join(DATA_DIR, "bm25_index.pkl")
 
@@ -60,13 +63,13 @@ class ChromaRetriever:
 
         results = []
         if not raw["ids"] or not raw["ids"][0]:
-            print(f"DEBUG [ChromaDB]: No results found for query '{query_text}'")
+            logger.debug(f"DEBUG [ChromaDB]: No results found for query '{query_text}'")
             return results
 
-        print(f"DEBUG [ChromaDB]: Found {len(raw['ids'][0])} results for '{query_text}'")
+        logger.debug(f"DEBUG [ChromaDB]: Found {len(raw['ids'][0])} results for '{query_text}'")
         for i, chunk_id in enumerate(raw["ids"][0]):
             distance = raw["distances"][0][i]
-            print(f"  -> Rank {i+1} | ID: {chunk_id} | Distance: {distance:.4f}")
+            logger.debug(f"  -> Rank {i+1} | ID: {chunk_id} | Distance: {distance:.4f}")
             results.append({
                 "chunk_id": chunk_id,
                 "document": raw["documents"][0][i],
@@ -106,7 +109,7 @@ class BM25Retriever:
                 "chunk_ids": self._chunk_ids,
                 "corpus": self._corpus,
             }, f)
-        print(f"DEBUG [BM25]: Index saved to {path}")
+        logger.debug(f"DEBUG [BM25]: Index saved to {path}")
 
     def load(self, path: str = BM25_PATH) -> bool:
         """Loads the BM25 index from disk. Returns True if successful."""
@@ -117,7 +120,7 @@ class BM25Retriever:
         self._bm25 = data["bm25"]
         self._chunk_ids = data["chunk_ids"]
         self._corpus = data["corpus"]
-        print(f"DEBUG [BM25]: Index loaded from {path} ({len(self._corpus)} docs)")
+        logger.debug(f"DEBUG [BM25]: Index loaded from {path} ({len(self._corpus)} docs)")
         return True
 
     def search(self, query: str, top_k: int = 5) -> List[Dict[str, Any]]:
@@ -131,11 +134,11 @@ class BM25Retriever:
         # Pair each score with its index, sort descending, take top_k
         ranked = sorted(enumerate(scores), key=lambda x: x[1], reverse=True)[:top_k]
 
-        print(f"DEBUG [BM25]: Found {len(ranked)} top results for '{query}'")
+        logger.debug(f"DEBUG [BM25]: Found {len(ranked)} top results for '{query}'")
         results = []
         for rank_idx, (idx, score) in enumerate(ranked):
             chunk_id = self._chunk_ids[idx]
-            print(f"  -> Rank {rank_idx+1} | ID: {chunk_id} | Score: {score:.4f}")
+            logger.debug(f"  -> Rank {rank_idx+1} | ID: {chunk_id} | Score: {score:.4f}")
             results.append({
                 "chunk_id": chunk_id,
                 "document": self._corpus[idx],
@@ -182,11 +185,11 @@ def reciprocal_rank_fusion(
 
     ranked_ids = sorted(scores, key=lambda cid: scores[cid], reverse=True)[:top_k]
 
-    print(f"\nDEBUG [RRF]: Fusing {len(dense_results)} Dense + {len(sparse_results)} Sparse results.")
+    logger.debug(f"\nDEBUG [RRF]: Fusing {len(dense_results)} Dense + {len(sparse_results)} Sparse results.")
     final_results = []
     for rank_idx, cid in enumerate(ranked_ids):
         rrf_score = scores[cid]
-        print(f"  -> Final Rank {rank_idx+1} | ID: {cid} | RRF Score: {rrf_score:.4f}")
+        logger.debug(f"  -> Final Rank {rank_idx+1} | ID: {cid} | RRF Score: {rrf_score:.4f}")
         final_results.append({**docs[cid], "rrf_score": rrf_score})
 
     return final_results
