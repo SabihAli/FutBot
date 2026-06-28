@@ -1,46 +1,204 @@
 import json
 import logging
+import random
 import re
 import requests
 import os
-from typing import List, Dict, Any
+import time as _time
+from typing import List, Dict, Any, Optional
 from dotenv import load_dotenv
 
-from src.prompt_loader import get_prompt
+from src.prompt_loader import get_prompt, get_prompt_parts
 
 # Load environment variables from .env file if it exists
 load_dotenv()
 
 logger = logging.getLogger(__name__)
 
-# Model configurations
+# ---------------------------------------------------------------------------
+# Provider Configuration
+# ---------------------------------------------------------------------------
+
+LLM_PROVIDER = os.environ.get("LLM_PROVIDER", "local").lower()  # "local" | "groq"
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
+GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
+GROQ_MAX_RETRIES = int(os.environ.get("GROQ_MAX_RETRIES", "5"))
+GROQ_BACKOFF_BASE = float(os.environ.get("GROQ_BACKOFF_BASE", "1.5"))
+
+# ---------------------------------------------------------------------------
+# Local Model Configurations (unchanged)
+# ---------------------------------------------------------------------------
+
 MODEL_ORCHESTRATOR = os.environ.get("MODEL_ORCHESTRATOR", "Qwen/Qwen3.5-0.8B")
 MODEL_GENERATOR = os.environ.get("MODEL_GENERATOR", "Qwen/Qwen3.5-2B")
 MODEL_DECISION = os.environ.get("MODEL_DECISION", "Qwen/Qwen3.5-4B")
 
-# Model-specific API endpoints
+# Model-specific API endpoints (local/ngrok)
 URL_08B = os.environ.get("URL_08B", "https://3ed4-2407-d000-2b-3df3-26d-b720-e3f1-5827.ngrok-free.app/v1/chat/completions")
 URL_2B = os.environ.get("URL_2B", "https://6006-154-192-5-123.ngrok-free.app/v1/chat/completions")
 URL_4B = os.environ.get("URL_4B", "https://19d9-154-192-5-123.ngrok-free.app/v1/chat/completions")
-# URL_4B = os.environ.get("URL_2B", "https://6006-154-192-5-123.ngrok-free.app/v1/chat/completions")
 
-# Qwen3 models output <think>...</think> blocks before their actual response.
+# ---------------------------------------------------------------------------
+# Groq Model Mapping (role → model slug)
+# ---------------------------------------------------------------------------
 
-# We must strip these to get the real answer.
+# qwen/qwen3.6-27b: current highest-intelligence model on Groq free tier.
+# Supports thinking/non-thinking toggle, multimodal input, 262K context.
+_GROQ_MODEL_MAIN = os.environ.get("GROQ_MODEL_MAIN", "qwen/qwen3.6-27b")
+_GROQ_MODEL_ORCHESTRATOR = os.environ.get("GROQ_MODEL_ORCHESTRATOR", "openai/gpt-oss-20b")
+
+# Maps the `step` argument from invoke_llm() to the Groq model slug.
+GROQ_MODEL_MAP: Dict[str, str] = {
+    "orchestrator":     _GROQ_MODEL_ORCHESTRATOR,  # separate budget from main model
+    "rewriter":         _GROQ_MODEL_MAIN,
+    "drafter":          _GROQ_MODEL_MAIN,
+    "simple_responder": _GROQ_MODEL_MAIN,
+    "judge":            _GROQ_MODEL_MAIN,
+}
+
+# Only the Decision Judge uses thinking mode.
+GROQ_THINKING_ROLES = {"judge"}
+
+
+# ---------------------------------------------------------------------------
+# Shared: <think> tag stripping
+# ---------------------------------------------------------------------------
+
 def _strip_think_tags(text: str) -> str:
     """Remove <think>...</think> reasoning blocks emitted by Qwen3 models."""
     stripped = re.sub(r'<think>[\s\S]*?</think>', '', text, flags=re.IGNORECASE)
     return stripped.strip()
 
-def invoke_llm(
-    prompt: str,
+
+# ---------------------------------------------------------------------------
+# Groq Backend
+# ---------------------------------------------------------------------------
+
+def _call_groq(
+    role: str,
+    system_prompt: str,
+    user_content: str,
+    image: Optional[bytes] = None,
+) -> tuple[str, str, int | None, int]:
+    """
+    Call the Groq API for the given role.
+
+    Returns (raw_response, clean_response, status_code, latency_ms).
+
+    Implements exponential backoff with jitter on HTTP 429.
+
+    Thinking mode is disabled for non-judge roles by adding `reasoning_effort="none"`
+    (or `"low"` for GPT models) to the payload. For the judge role, this parameter
+    is omitted so the model defaults to thinking mode.
+    """
+    if not GROQ_API_KEY:
+        raise ValueError(
+            "GROQ_API_KEY is not set. "
+            "Add it to your .env file or environment when using LLM_PROVIDER=groq."
+        )
+
+    model = GROQ_MODEL_MAP.get(role, _GROQ_MODEL_MAIN)
+    thinking = role in GROQ_THINKING_ROLES
+
+    # Build user message content (supports optional image attachment)
+    if image is not None:
+        import base64
+        img_b64 = base64.b64encode(image).decode("utf-8")
+        user_msg_content = [
+            {"type": "text", "text": user_content},
+            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{img_b64}"}},
+        ]
+    else:
+        user_msg_content = user_content
+
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_msg_content},
+    ]
+
+    payload: Dict[str, Any] = {
+        "model": model,
+        "messages": messages,
+        "stream": False,
+    }
+
+    if not thinking:
+        if "gpt" in model.lower():
+            payload["reasoning_effort"] = "low"
+        else:
+            payload["reasoning_effort"] = "none"
+
+    headers = {
+        "Authorization": f"Bearer {GROQ_API_KEY}",
+        "Content-Type": "application/json",
+    }
+
+    raw = ""
+    clean = ""
+    status_code: int | None = None
+    t0 = _time.monotonic()
+
+    for attempt in range(GROQ_MAX_RETRIES):
+        try:
+            resp = requests.post(
+                GROQ_API_URL,
+                json=payload,
+                headers=headers,
+                timeout=120,
+            )
+            status_code = resp.status_code
+
+            if resp.status_code == 429:
+                retry_after = float(
+                    resp.headers.get("retry-after", GROQ_BACKOFF_BASE ** attempt)
+                )
+                wait = retry_after + random.uniform(0, 0.5)
+                logger.warning(
+                    f"Groq 429 on attempt {attempt + 1}/{GROQ_MAX_RETRIES}. "
+                    f"Waiting {wait:.2f}s (retry-after={retry_after})."
+                )
+                _time.sleep(wait)
+                continue
+
+            resp.raise_for_status()
+
+            choices = resp.json().get("choices", [{}])
+            raw = choices[0].get("message", {}).get("content", "").strip()
+            clean = _strip_think_tags(raw)
+
+            if not clean:
+                logger.warning(
+                    f"Groq ({model}, role={role}) returned empty response after "
+                    f"stripping think tags. Raw: {raw[:200]!r}"
+                )
+
+            latency_ms = int((_time.monotonic() - t0) * 1000)
+            return raw, clean, status_code, latency_ms
+
+        except requests.RequestException as e:
+            latency_ms = int((_time.monotonic() - t0) * 1000)
+            logger.error(f"Groq API request error (attempt {attempt + 1}): {e}")
+            if attempt == GROQ_MAX_RETRIES - 1:
+                return raw, clean, status_code, latency_ms
+            _time.sleep(GROQ_BACKOFF_BASE ** attempt + random.uniform(0, 0.5))
+
+    latency_ms = int((_time.monotonic() - t0) * 1000)
+    return raw, clean, status_code, latency_ms
+
+
+# ---------------------------------------------------------------------------
+# Local Backend
+# ---------------------------------------------------------------------------
+
+def _call_local(
     model_name: str,
-    step: str = "unknown",
-    run_logger=None,
-    iteration: int = 0,
-) -> str:
-    """Invokes the external API over ngrok."""
-    import time as _time
+    prompt: str,
+) -> tuple[str, str, str, int | None, int]:
+    """
+    Call the local Ollama/ngrok endpoint.
+
+    Returns (api_url, raw_response, clean_response, status_code, latency_ms).
+    """
     model_name_lower = model_name.lower()
     if "0.8b" in model_name_lower:
         api_url = URL_08B
@@ -51,14 +209,11 @@ def invoke_llm(
     else:
         api_url = URL_2B
 
-    # Format payload based on endpoint type
     if "/chat/completions" in api_url or "/v1/chat/completions" in api_url:
         payload = {
             "model": model_name,
-            "messages": [
-                {"role": "user", "content": prompt}
-            ],
-            "stream": False
+            "messages": [{"role": "user", "content": prompt}],
+            "stream": False,
         }
     else:
         # Legacy Ollama API format
@@ -66,56 +221,110 @@ def invoke_llm(
             "model": model_name,
             "prompt": prompt,
             "stream": False,
-            "options": {"think": False}
+            "options": {"think": False},
         }
 
-    status_code = None
     raw = ""
     clean = ""
-    latency_ms = None
+    status_code: int | None = None
     t0 = _time.monotonic()
+
     try:
-        resp = requests.post(
-            api_url,
-            json=payload,
-            timeout=120  # Raised from 30s — Qwen3 2b/4b need longer to generate
-        )
-        latency_ms = int((_time.monotonic() - t0) * 1000)
+        resp = requests.post(api_url, json=payload, timeout=120)
         status_code = resp.status_code
         resp.raise_for_status()
 
-        # Parse response based on endpoint type
         if "/chat/completions" in api_url or "/v1/chat/completions" in api_url:
             raw = resp.json().get("choices", [{}])[0].get("message", {}).get("content", "").strip()
         else:
             raw = resp.json().get("response", "").strip()
 
-        # Strip any remaining <think> blocks just in case
         clean = _strip_think_tags(raw)
         if not clean:
-            logger.warning(f"LLM ({model_name}) returned an empty response after stripping think tags. Raw: {raw[:200]!r}")
-        return clean
+            logger.warning(
+                f"LLM ({model_name}) returned an empty response after stripping think tags. "
+                f"Raw: {raw[:200]!r}"
+            )
+
+        latency_ms = int((_time.monotonic() - t0) * 1000)
+        return api_url, raw, clean, status_code, latency_ms
+
     except requests.RequestException as e:
         latency_ms = int((_time.monotonic() - t0) * 1000)
-        logger.error(f"Error calling LLM API ({model_name}) at {api_url}: {e}")
-        return ""
-    finally:
-        if run_logger is not None:
-            try:
-                run_logger.log_llm_call(
-                    step=step,
-                    model_name=model_name,
-                    prompt=prompt,
-                    raw_response=raw,
-                    response=clean,
-                    api_url=api_url,
-                    status_code=status_code,
-                    latency_ms=latency_ms,
-                    iteration=iteration,
-                )
-            except Exception as log_err:
-                logger.warning(f"Failed to log LLM call: {log_err}")
+        logger.error(f"Error calling local LLM API ({model_name}) at {api_url}: {e}")
+        return api_url, raw, clean, status_code, latency_ms
 
+
+# ---------------------------------------------------------------------------
+# Provider-Aware Dispatcher — public interface (signature unchanged)
+# ---------------------------------------------------------------------------
+
+def invoke_llm(
+    prompt: str,
+    model_name: str,
+    step: str = "unknown",
+    run_logger=None,
+    iteration: int = 0,
+    image: Optional[bytes] = None,
+    system_prompt: Optional[str] = None,
+) -> str:
+    """
+    Provider-aware LLM dispatcher.
+
+    When LLM_PROVIDER=local  → calls the local Ollama/ngrok endpoint using `model_name`.
+                               `system_prompt` is prepended to `prompt` separated by two
+                               newlines so local models still receive all instructions.
+    When LLM_PROVIDER=groq   → calls the Groq API, selecting the model from GROQ_MODEL_MAP
+                               by `step` (role). `system_prompt` goes in role:system;
+                               `prompt` goes in role:user.
+
+    All existing call sites remain identical — `system_prompt` defaults to None and the
+    combined `prompt` string is used as a fallback for both providers.
+    """
+    raw = ""
+    clean = ""
+    api_url = ""
+    status_code: int | None = None
+    latency_ms = 0
+
+    if LLM_PROVIDER == "groq":
+        api_url = GROQ_API_URL
+        groq_model = GROQ_MODEL_MAP.get(step, _GROQ_MODEL_MAIN)
+        # If a dedicated system_prompt was supplied use it; otherwise treat the
+        # whole prompt as user content with a minimal system message.
+        sys_msg = system_prompt if system_prompt is not None else ""
+        raw, clean, status_code, latency_ms = _call_groq(
+            step, sys_msg, prompt, image=image
+        )
+        log_model_name = groq_model
+    else:
+        # Local path: merge system_prompt into the prompt string if provided
+        local_prompt = f"{system_prompt}\n\n{prompt}" if system_prompt else prompt
+        api_url, raw, clean, status_code, latency_ms = _call_local(model_name, local_prompt)
+        log_model_name = model_name
+
+    if run_logger is not None:
+        try:
+            run_logger.log_llm_call(
+                step=step,
+                model_name=log_model_name,
+                prompt=prompt,
+                raw_response=raw,
+                response=clean,
+                api_url=api_url,
+                status_code=status_code,
+                latency_ms=latency_ms,
+                iteration=iteration,
+            )
+        except Exception as log_err:
+            logger.warning(f"Failed to log LLM call: {log_err}")
+
+    return clean
+
+
+# ---------------------------------------------------------------------------
+# Pipeline Components (unchanged interface)
+# ---------------------------------------------------------------------------
 
 class QueryRewriter:
     def rewrite(
@@ -126,15 +335,17 @@ class QueryRewriter:
         iteration: int = 0,
     ) -> str:
         history_text = "\n".join([f"{m['role']}: {m['content']}" for m in context_messages])
-        prompt_template = get_prompt("REWRITER")
-        prompt = prompt_template.format(history_text=history_text, query=query)
+        system_prompt, user_template = get_prompt_parts("REWRITER")
+        user_content = user_template.format(history_text=history_text, query=query)
         return invoke_llm(
-            prompt,
+            user_content,
             model_name=MODEL_GENERATOR,
             step="rewriter",
             run_logger=run_logger,
             iteration=iteration,
+            system_prompt=system_prompt,
         )
+
 
 class Orchestrator:
     def classify(
@@ -143,18 +354,20 @@ class Orchestrator:
         run_logger=None,
         iteration: int = 0,
     ) -> str:
-        prompt_template = get_prompt("ORCHESTRATOR")
-        prompt = prompt_template.format(query=query)
+        system_prompt, user_template = get_prompt_parts("ORCHESTRATOR")
+        user_content = user_template.format(query=query)
         classification = invoke_llm(
-            prompt,
+            user_content,
             model_name=MODEL_ORCHESTRATOR,
             step="orchestrator",
             run_logger=run_logger,
             iteration=iteration,
+            system_prompt=system_prompt,
         ).upper()
         if "KNOWLEDGE" in classification:
             return "KNOWLEDGE"
         return "SIMPLE"
+
 
 class DraftGenerator:
     def generate(
@@ -165,15 +378,17 @@ class DraftGenerator:
         iteration: int = 0,
     ) -> str:
         context_text = "\n\n".join([f"Source [{c.get('chunk_id', 'unknown')}]:\n{c.get('document', '')}" for c in chunks])
-        prompt_template = get_prompt("DRAFT_GENERATOR")
-        prompt = prompt_template.format(context_text=context_text, query=query)
+        system_prompt, user_template = get_prompt_parts("DRAFT_GENERATOR")
+        user_content = user_template.format(context_text=context_text, query=query)
         return invoke_llm(
-            prompt,
+            user_content,
             model_name=MODEL_GENERATOR,
             step="drafter",
             run_logger=run_logger,
             iteration=iteration,
+            system_prompt=system_prompt,
         )
+
 
 class DecisionJudge:
     def evaluate(
@@ -185,23 +400,18 @@ class DecisionJudge:
         iteration: int = 0,
     ) -> Dict[str, str]:
         context_text = "\n\n".join([c.get("document", "") for c in chunks])
-        prompt_template = get_prompt("DECISION_JUDGE")
-        # To avoid KeyError for {{ and }}, the text file uses standard format.
-        # Wait, the prompt contains {{ and }} which format requires!
-        # I actually formatted it with double brackets in prompts.txt.
-        # But wait, python format() handles double brackets by reducing to single bracket.
-        prompt = prompt_template.format(context_text=context_text, query=query, draft=draft)
+        system_prompt, user_template = get_prompt_parts("DECISION_JUDGE")
+        user_content = user_template.format(context_text=context_text, query=query, draft=draft)
 
         result = invoke_llm(
-            prompt,
+            user_content,
             model_name=MODEL_DECISION,
             step="judge",
             run_logger=run_logger,
             iteration=iteration,
+            system_prompt=system_prompt,
         )
         try:
-            # Try to extract JSON from anywhere in the response
-            import re
             json_match = re.search(r'\{.*?\}', result, re.DOTALL)
             if json_match:
                 return json.loads(json_match.group())
