@@ -13,7 +13,7 @@ from src.llm_components import (
 from src.retriever import reciprocal_rank_fusion
 from src.db_logger import PipelineRunLogger, log_pipeline_trace
 
-from src.prompt_loader import get_prompt
+from src.prompt_loader import get_prompt, get_prompt_parts
 
 logger = logging.getLogger(__name__)
 
@@ -94,14 +94,15 @@ def simple_responder_node(state: GraphState) -> GraphState:
     run_logger = state.get("run_logger")
     iteration = state.get("retry_count", 0) + 1
 
-    prompt_template = get_prompt("SIMPLE_RESPONDER")
-    prompt = prompt_template.format(query=state.get("rewritten_query", state.get("query", "")))
+    system_prompt, user_template = get_prompt_parts("SIMPLE_RESPONDER")
+    user_content = user_template.format(query=state.get("rewritten_query", state.get("query", "")))
     answer = invoke_llm(
-        prompt,
+        user_content,
         model_name=MODEL_GENERATOR,
         step="simple_responder",
         run_logger=run_logger,
         iteration=iteration,
+        system_prompt=system_prompt,
     )
 
     return {"final_answer": answer}
