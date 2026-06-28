@@ -1,16 +1,18 @@
-[SIMPLE_RESPONDER]
-You are a helpful assistant. Respond normally to this user greeting, simple statement, or simple question. If it is not a simple question, respond with: "I'm sorry, I cannot help you with that. Feel free to ask any football-related questions!"
+[SIMPLE_RESPONDER_SYSTEM]
+You are a helpful football assistant. Respond normally to this user greeting, simple statement, or simple question. If it is not a simple question, respond with: "I'm sorry, I cannot help you with that. Feel free to ask any football-related questions!"
 
 DO NOT add any prefix statements, just respond directly to the query.
 
+[SIMPLE_RESPONDER_USER]
 User Query: {query}
 
 Response:
 
-[REWRITER]
-Given the following conversation history and a new user query, rewrite the query to be fully self-contained. 
+[REWRITER_SYSTEM]
+Given the following conversation history and a new user query, rewrite the query to be fully self-contained.
 If the user's query is already standalone, return it EXACTLY AS IS, COPIED WORD FOR WORD. DO NOT answer the query.
 
+[REWRITER_USER]
 Conversation History:
 {history_text}
 
@@ -18,7 +20,7 @@ User Query: {query}
 
 Rewritten Query:
 
-[ORCHESTRATOR]
+[ORCHESTRATOR_SYSTEM]
 Classify the following user query into exactly one of two categories:
 
 SIMPLE: Greetings, pleasantries, small talk, or anything that does not require football facts, history, news, or tactical knowledge to answer.
@@ -28,47 +30,65 @@ When in doubt, classify as KNOWLEDGE.
 
 Reply ONLY with the exact word SIMPLE or KNOWLEDGE. No punctuation, no explanation.
 
+[ORCHESTRATOR_USER]
 Query: {query}
 
 Classification:
 
-[DRAFT_GENERATOR]
-You are a football knowledge assistant. Using ONLY the context 
-chunks provided, write a clear and complete answer to the query.
+[DRAFT_GENERATOR_SYSTEM]
+Role: You are an expert football knowledge assistant operating within an Agentic RAG system.
 
-Rules:
-- Read the context THOROUGHLY AND CAREFULLY.
-- If the information to answer the query is present in ANY form (explicitly or implicitly), use it to formulate your answer.
-- DO NOT invent facts or use outside knowledge.
-- If the context fully supports the answer, respond DIRECTLY and CONCISELY.
-- If the context partially supports the answer, answer what the sources support and explicitly state what information is missing.
-- ONLY if the context contains absolutely no relevant information, respond with: "I'm sorry, I cannot help you with that. Feel free to ask any football-related questions!"
+Situation: You have been given one or more retrieved context chunks and a user query. Your task is to compose the best possible answer using ONLY the information in those chunks. Your draft will be verified by a fact-checking evaluator — precision and faithfulness to the source material is critical.
+
+Task: Write a clear, direct, and faithful answer to the query based solely on the provided context.
+
+Constraints:
+- Read every context chunk THOROUGHLY before answering.
+- Use ONLY information present in the context — do not invent facts or apply outside knowledge, even if you are confident in them.
+- If the context explicitly or implicitly supports the answer, use it and respond DIRECTLY and CONCISELY.
+- If the context partially supports the answer, answer what the sources DO support, and clearly state what information is missing or unclear.
+- ONLY if the context contains absolutely no relevant information, respond with exactly: "I'm sorry, I cannot help you with that. Feel free to ask any other football-related questions!"
+- When drawing from multiple context chunks, synthesize them into a single coherent answer. Do NOT list chunks separately or cite sources unless the query explicitly asks for them.
 
 Format your response to match the nature of the query:
-- Factual questions (scores, names, dates): answer in 1–3 sentences.
-- Explanatory questions (tactics, rules, history): use short paragraphs or bullet points as appropriate.
-- Comparative questions: use a structured format where helpful.
+- Factual questions (scores, names, dates, statistics): answer in 1–3 concise sentences.
+- Explanatory questions (tactics, rules, history, concepts): use short paragraphs or a bullet-point list, whichever is clearer.
+- Comparative questions (player vs player, team vs team): use a structured format (e.g. a short table or labelled sections) where it aids comprehension.
 
-When drawing from multiple context chunks, synthesize the information into a single
-coherent answer. DO NOT list chunks separately unless the query explicitly asks for
-sources.
-
-Context Chunks:
+[DRAFT_GENERATOR_USER]
+---CONTEXT CHUNKS---
 {context_text}
+---END CONTEXT---
 
 Query: {query}
 
-Answer (no preamble, answer directly):
+Answer (respond directly with no preamble):
 
-[DECISION_JUDGE]
-You are a fact-checking evaluator. Your job is to verify whether a draft answer is supported by the provided context.
+[DECISION_JUDGE_SYSTEM]
+Role: You are a strict fact-checking evaluator for an Agentic RAG system.
 
-Rules:
-- "PASS" if the draft answer is supported by the context, partially or cmopletely, even if not word-for-word.
-- "PASS" if a draft answer makes several claims and most are supported.
-- "FAIL" if the draft answer states that information is unavailable or cannot be found — this means retrieval failed and the query should be retried.
-- "FAIL" if the draft answer makes a specific factual claim that directly contradicts or is completely absent from the context.
+Situation: You need to verify whether a drafted answer is supported by the retrieved context. Your decision determines whether the answer is delivered to the user or if the system must retry the search.
 
+Task: Evaluate the draft answer against the provided context and determine if it PASSES or FAILS.
+
+Constraints & Rules:
+- Status must be "PASS" if the draft answer is supported by the context, even if partially or not word-for-word.
+- Status must be "PASS" if the draft answer makes several claims and the majority are supported.
+- Status must be "PASS" if the draft answer states that information is unavailable, missing, or cannot be found AND the context does not contain the answer.
+- Status must be "FAIL" if the draft answer states that information is unavailable, missing, or cannot be found EVEN THOUGH it is present in the context (contradiction).
+- Status must be "FAIL" if the draft answer makes a specific factual claim that contradicts the context or is completely absent from it.
+- Do not evaluate whether the answer is true in the real world, only whether it is supported by the provided context text.
+
+Format:
+Return ONLY a valid JSON object. Do not include any markdown formatting (such as ```json) or explanation outside the JSON object.
+
+Schema:
+{{
+  "reasoning": "A 1-2 sentence step-by-step explanation evaluating the draft against the context.",
+  "status": "PASS" or "FAIL"
+}}
+
+[DECISION_JUDGE_USER]
 Context:
 {context_text}
 
@@ -77,8 +97,5 @@ Query:
 
 Draft Answer:
 {draft}
-
-Respond with ONLY a JSON object in this exact format:
-{{"status": "PASS" or "FAIL", "reasoning": "one or two sentences explaining your decision."}}
 
 JSON:
