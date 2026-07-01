@@ -80,7 +80,10 @@ def test_get_session_existing():
 # POST /api/chat
 # ---------------------------------------------------------------------------
 def test_post_chat(mocker):
-    mock_pipeline = mocker.patch("src.api.run_pipeline", return_value="Here is your answer.")
+    mock_pipeline = mocker.patch(
+        "src.api.run_pipeline",
+        return_value=("Here is your answer.", "{}", 0),
+    )
 
     payload = {"session_id": "test-session", "message": "Who won the game?"}
     response = client.post("/api/chat", json=payload)
@@ -89,12 +92,14 @@ def test_post_chat(mocker):
     data = response.json()
     assert data["reply"] == "Here is your answer."
 
-    # Pipeline called with correct keyword args
     mock_pipeline.assert_called_once()
-    assert mock_pipeline.call_args[1]["query"] == "Who won the game?"
-    assert isinstance(mock_pipeline.call_args[1]["context_messages"], list)
-    # Empty list for a fresh session (no prior history)
-    assert len(mock_pipeline.call_args[1]["context_messages"]) == 0
+    call_kwargs = mock_pipeline.call_args[1]
+    assert call_kwargs["query"] == "Who won the game?"
+    assert isinstance(call_kwargs["context_messages"], list)
+    assert len(call_kwargs["context_messages"]) == 1
+    assert call_kwargs["context_messages"][0]["content"] == "Who won the game?"
+    assert call_kwargs["snapshot"] == ""
+    assert call_kwargs["snapshot_turn_count"] == 0
 
     # Both user and assistant messages stored in session
     session = sessions_db["test-session"]

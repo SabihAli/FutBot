@@ -2,6 +2,7 @@ import pytest
 from typing import TypedDict, List, Dict, Any
 from src.graph import (
     GraphState,
+    compressor_node,
     orchestrator_node,
     simple_responder_node,
     rewrite_node,
@@ -17,9 +18,31 @@ from src.graph import (
 # Node Tests
 # ---------------------------------------------------------------------------
 
+def test_compressor_node(mocker):
+    mocker.patch(
+        "src.graph.SnapshotCompressor.compress_incremental",
+        return_value='{"schema_version":1}',
+    )
+    state: GraphState = {
+        "session_id": "s1",
+        "all_messages": [{"role": "user", "content": f"msg {i}"} for i in range(12)],
+        "snapshot": "",
+        "snapshot_turn_count": 0,
+    }
+
+    new_state = compressor_node(state)
+    assert new_state["snapshot"] == '{"schema_version":1}'
+    assert new_state["snapshot_turn_count"] == 2
+    assert len(new_state["context_messages"]) == 10
+
+
 def test_rewrite_node(mocker):
     mocker.patch("src.graph.QueryRewriter.rewrite", return_value="Rewritten Query")
-    state: GraphState = {"query": "He did", "context_messages": [{"role": "user", "content": "Did Messi score?"}]}
+    state: GraphState = {
+        "query": "He did",
+        "context_messages": [{"role": "user", "content": "Did Messi score?"}],
+        "snapshot": "{}",
+    }
     
     new_state = rewrite_node(state)
     assert new_state["rewritten_query"] == "Rewritten Query"
