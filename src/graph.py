@@ -9,7 +9,9 @@ from src.llm_components import (
     Orchestrator,
     DraftGenerator,
     DecisionJudge,
+    SnapshotCompressor,
 )
+from src.context import ConversationContext
 from src.retriever import reciprocal_rank_fusion
 from src.db_logger import PipelineRunLogger, log_pipeline_trace
 
@@ -22,11 +24,13 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 class GraphState(TypedDict, total=False):
     query: str
-    context_messages: List[Dict[str, str]]
     session_id: str
-
-    # Logger instance passed through graph state (not serializable, but fine for in-process runs)
     run_logger: Any
+
+    all_messages: List[Dict[str, str]]
+    snapshot: str
+    snapshot_turn_count: int
+    context_messages: List[Dict[str, str]]
 
     classification: str
     rewritten_query: str
@@ -48,6 +52,21 @@ class GraphState(TypedDict, total=False):
 # ---------------------------------------------------------------------------
 # Nodes
 # ---------------------------------------------------------------------------
+def compressor_node(state: GraphState) -> GraphState:
+    run_logger = state.get("run_logger")
+
+    ctx = ConversationContext.from_graph_fields(
+        session_id=state.get("session_id", ""),
+        messages=state.get("all_messages", []),
+        snapshot=state.get("snapshot", ""),
+        snapshot_turn_count=state.get("snapshot_turn_count", 0),
+    )
+
+    ctx.maintain_snapshot(SnapshotCompressor(), run_logger=run_logger)
+
+    return ctx.to_graph_fields()
+
+
 def rewrite_node(state: GraphState) -> GraphState:
     run_logger = state.get("run_logger")
     retry_count = state.get("retry_count", 0)
@@ -56,7 +75,13 @@ def rewrite_node(state: GraphState) -> GraphState:
     rewriter = QueryRewriter()
     query = state.get("query", "")
     context = state.get("context_messages", [])
-    rewritten = rewriter.rewrite(query, context, run_logger=run_logger, iteration=iteration)
+    rewritten = rewriter.rewrite(
+        query,
+        context,
+        snapshot=state.get("snapshot") or "{}",
+        run_logger=run_logger,
+        iteration=iteration,
+    )
 
     # Log the start of this loop iteration
     iteration_id = None
@@ -120,10 +145,10 @@ def retrieve_node(state: GraphState) -> GraphState:
     try:
         from src.api import global_chroma, global_bm25
 
-        dense_results = global_chroma.query(query, top_k=5)
+        dense_results = global_chroma.query(query, top_k=15)
 
         try:
-            sparse_results = global_bm25.search(query, top_k=5)
+            sparse_results = global_bm25.search(query, top_k=15)
         except RuntimeError:
             sparse_results = []
 
@@ -239,6 +264,7 @@ def build_graph():
     workflow = StateGraph(GraphState)
 
     # Add Nodes
+    workflow.add_node("compressor", compressor_node)
     workflow.add_node("rewriter", rewrite_node)
     workflow.add_node("orchestrator", orchestrator_node)
     workflow.add_node("simple_responder", simple_responder_node)
@@ -246,10 +272,11 @@ def build_graph():
     workflow.add_node("drafter", draft_node)
     workflow.add_node("judge", judge_node)
 
-    # Entry Point is now the rewriter
-    workflow.set_entry_point("rewriter")
+    # Entry point: eager snapshot maintenance before rewrite
+    workflow.set_entry_point("compressor")
 
     # Edges
+    workflow.add_edge("compressor", "rewriter")
     workflow.add_edge("rewriter", "orchestrator")
 
     workflow.add_conditional_edges(
@@ -287,8 +314,10 @@ def run_pipeline(
     query: str,
     context_messages: Optional[List[Dict[str, str]]] = None,
     session_id: str = "",
-) -> str:
-    """Convenience function to run the full RAG pipeline for a given query."""
+    snapshot: str = "",
+    snapshot_turn_count: int = 0,
+) -> tuple[str, str, int]:
+    """Run the full RAG pipeline. Returns (answer, snapshot, snapshot_turn_count)."""
     if context_messages is None:
         context_messages = []
 
@@ -297,7 +326,10 @@ def run_pipeline(
     with PipelineRunLogger(original_query=query, session_id=session_id) as run_logger:
         initial_state: GraphState = {
             "query": query,
-            "context_messages": context_messages,
+            "all_messages": context_messages,
+            "snapshot": snapshot,
+            "snapshot_turn_count": snapshot_turn_count,
+            "context_messages": [],
             "session_id": session_id,
             "run_logger": run_logger,
             "retry_count": 0,
@@ -309,10 +341,14 @@ def run_pipeline(
         result = app.invoke(initial_state)
 
         answer = result.get("final_answer", "Error: No answer generated.")
+        result_snapshot = result.get("snapshot", snapshot)
+        result_turn_count = result.get("snapshot_turn_count", snapshot_turn_count)
 
         # If we hit max retries without a PASS, append a user-visible warning
         if result.get("reached_max_retries"):
             answer += "\n\nWARNING: No decisive answer was found in the available sources. This result should be independently verified."
+
+        snapshot_token_count = len(result_snapshot.split()) if result_snapshot else 0
 
         # Finalize the run record
         try:
@@ -321,8 +357,10 @@ def run_pipeline(
                 total_iterations=result.get("retry_count", 0),
                 final_answer=answer,
                 reached_max_retries=bool(result.get("reached_max_retries")),
+                snapshot_text=result_snapshot,
+                snapshot_token_count=snapshot_token_count,
             )
         except Exception as e:
             logger.error(f"Failed to finalize run log: {e}")
 
-    return answer
+    return answer, result_snapshot, result_turn_count

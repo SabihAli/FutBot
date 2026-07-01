@@ -108,7 +108,17 @@ def init_db():
     """)
 
     conn.commit()
+    _migrate_pipeline_runs_schema(conn)
     conn.close()
+
+
+def _migrate_pipeline_runs_schema(conn: sqlite3.Connection):
+    """Add snapshot columns to existing databases."""
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(pipeline_runs)").fetchall()}
+    if "snapshot_text" not in columns:
+        conn.execute("ALTER TABLE pipeline_runs ADD COLUMN snapshot_text TEXT")
+    if "snapshot_token_count" not in columns:
+        conn.execute("ALTER TABLE pipeline_runs ADD COLUMN snapshot_token_count INTEGER")
 
 
 # ---------------------------------------------------------------------------
@@ -290,6 +300,8 @@ class PipelineRunLogger:
         total_iterations: int = 0,
         final_answer: str = "",
         reached_max_retries: bool = False,
+        snapshot_text: str = "",
+        snapshot_token_count: Optional[int] = None,
     ):
         elapsed = int(time.monotonic() * 1000) - self._start_ms
         conn = self._connect()
@@ -297,11 +309,13 @@ class PipelineRunLogger:
             conn.execute(
                 """UPDATE pipeline_runs
                    SET classification=?, total_iterations=?, final_answer=?,
-                       reached_max_retries=?, finished_at=?, duration_ms=?
+                       reached_max_retries=?, finished_at=?, duration_ms=?,
+                       snapshot_text=?, snapshot_token_count=?
                    WHERE id=?""",
                 (
                     classification, total_iterations, final_answer,
                     int(reached_max_retries), _now(), elapsed,
+                    snapshot_text, snapshot_token_count,
                     self.run_id
                 )
             )

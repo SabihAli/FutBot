@@ -8,6 +8,7 @@ import time as _time
 from typing import List, Dict, Any, Optional
 from dotenv import load_dotenv
 
+from src.config import SNAPSHOT_MAX_TOKENS
 from src.prompt_loader import get_prompt, get_prompt_parts
 
 # Load environment variables from .env file if it exists
@@ -51,6 +52,7 @@ _GROQ_MODEL_ORCHESTRATOR = os.environ.get("GROQ_MODEL_ORCHESTRATOR", "openai/gpt
 GROQ_MODEL_MAP: Dict[str, str] = {
     "orchestrator":     _GROQ_MODEL_ORCHESTRATOR,  # separate budget from main model
     "rewriter":         _GROQ_MODEL_MAIN,
+    "compressor":       _GROQ_MODEL_MAIN,
     "drafter":          _GROQ_MODEL_MAIN,
     "simple_responder": _GROQ_MODEL_MAIN,
     "judge":            _GROQ_MODEL_MAIN,
@@ -323,20 +325,66 @@ def invoke_llm(
 
 
 # ---------------------------------------------------------------------------
-# Pipeline Components (unchanged interface)
+# Pipeline Components
 # ---------------------------------------------------------------------------
+
+class SnapshotCompressor:
+    """Stateless LLM adapter for incremental JSON snapshot compression."""
+
+    def compress_incremental(
+        self,
+        existing_snapshot: str,
+        new_messages: List[Dict[str, str]],
+        run_logger=None,
+    ) -> str:
+        newly_aged_text = "\n".join(
+            f"{m['role']}: {m['content']}" for m in new_messages
+        )
+        system_prompt, user_template = get_prompt_parts("COMPRESSOR")
+        system_prompt = system_prompt.format(max_tokens=SNAPSHOT_MAX_TOKENS)
+        user_content = user_template.format(
+            existing_snapshot=existing_snapshot.strip() or "{}",
+            newly_aged_messages=newly_aged_text,
+        )
+        result = invoke_llm(
+            user_content,
+            model_name=MODEL_GENERATOR,
+            step="compressor",
+            run_logger=run_logger,
+            iteration=0,
+            system_prompt=system_prompt,
+        )
+        return self._parse_or_fallback(result, existing_snapshot)
+
+    def _parse_or_fallback(self, raw: str, existing_snapshot: str) -> str:
+        text = raw.strip()
+        text = re.sub(r"^```(?:json)?\s*|\s*```$", "", text, flags=re.IGNORECASE | re.MULTILINE)
+        try:
+            parsed = json.loads(text)
+            return json.dumps(parsed, separators=(",", ":"))
+        except json.JSONDecodeError:
+            logger.warning(
+                "Snapshot compressor returned invalid JSON; keeping existing snapshot."
+            )
+            return existing_snapshot or "{}"
+
 
 class QueryRewriter:
     def rewrite(
         self,
         query: str,
         context_messages: List[Dict[str, str]],
+        snapshot: str = "",
         run_logger=None,
         iteration: int = 0,
     ) -> str:
         history_text = "\n".join([f"{m['role']}: {m['content']}" for m in context_messages])
         system_prompt, user_template = get_prompt_parts("REWRITER")
-        user_content = user_template.format(history_text=history_text, query=query)
+        user_content = user_template.format(
+            snapshot=snapshot or "{}",
+            history_text=history_text,
+            query=query,
+        )
         return invoke_llm(
             user_content,
             model_name=MODEL_GENERATOR,

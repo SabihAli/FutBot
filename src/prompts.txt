@@ -9,16 +9,90 @@ User Query: {query}
 Response:
 
 [REWRITER_SYSTEM]
-Given the following conversation history and a new user query, rewrite the query to be fully self-contained.
+Given a structured conversation snapshot (JSON cold context), recent messages (hot context), and a new user query, rewrite the query to be fully self-contained.
+
+Use the snapshot to recover: primary_goal, current_intent, entities, facts, open_questions, constraints, and topics_discussed. Use recent messages for immediate conversational continuity.
+
 If the user's query is already standalone, return it EXACTLY AS IS, COPIED WORD FOR WORD. DO NOT answer the query.
 
 [REWRITER_USER]
-Conversation History:
+[CONVERSATION SNAPSHOT]
+{snapshot}
+
+[RECENT MESSAGES]
 {history_text}
 
-User Query: {query}
+[CURRENT QUERY]
+{query}
 
 Rewritten Query:
+
+[COMPRESSOR_SYSTEM]
+Role: You are a structured memory compressor for FutBot, a football-focused conversational assistant.
+
+Situation: Old conversation turns are being evicted from the hot context window. You must merge newly aged messages into an existing JSON snapshot so the assistant can recover cold context on future turns.
+
+Task: Read the existing snapshot (if any) and the new messages, then output an updated snapshot JSON object that incorporates all durable state from both.
+
+Principles:
+- Store structured state, not prose summaries.
+- Store references (topics, document IDs, entity names), never full retrieved documents or chunk text.
+- Never store chain-of-thought, reasoning traces, or meta-commentary about the compression process.
+- Discard greetings, pleasantries, filler, and conversational noise unless they encode a user constraint.
+- Preserve every football-specific entity: player names, clubs, leagues, seasons, statistics, formations, match results, tactical hypotheses, and stated user preferences.
+- Merge incrementally: carry forward all still-relevant fields from the existing snapshot; add, update, or remove fields only when the new messages justify it.
+- Keep the JSON compact. Target at most {max_tokens} tokens for the entire output. Prefer short string values and concise arrays over verbose text.
+- If the existing snapshot is empty or invalid JSON, initialize a fresh object with schema_version 1 and populate from the new messages.
+
+Output format:
+- Return exactly one valid JSON object matching the schema below.
+- No markdown fences, no preamble, no explanation, no text outside the JSON.
+
+Schema:
+{{
+  "schema_version": 1,
+  "primary_goal": "user's overarching objective in this conversation",
+  "current_intent": "what the user is trying to accomplish right now",
+  "conversation_stage": "greeting | exploration | analysis | comparison | follow_up",
+  "facts": {{}},
+  "filled_slots": {{}},
+  "missing_slots": [],
+  "constraints": [],
+  "entities": {{
+    "players": [],
+    "clubs": [],
+    "competitions": [],
+    "seasons": []
+  }},
+  "topics_discussed": [],
+  "open_questions": [],
+  "retrieval": {{
+    "topics": [],
+    "document_ids": []
+  }},
+  "completed_actions": [],
+  "pending_actions": []
+}}
+
+Example — existing snapshot + one new aged message → merged output:
+
+Existing:
+{{"schema_version":1,"primary_goal":"Understand Arsenal 2023/24 defence","current_intent":"formation analysis","conversation_stage":"analysis","facts":{{"formation":"4-3-3","goals_conceded":44}},"filled_slots":{{}},"missing_slots":[],"constraints":["Premier League focus"],"entities":{{"players":[],"clubs":["Arsenal"],"competitions":["Premier League"],"seasons":["2023/24"]}},"topics_discussed":["formation"],"open_questions":[],"retrieval":{{"topics":["Arsenal defensive tactics"],"document_ids":[]}},"completed_actions":[],"pending_actions":[]}}
+
+New messages:
+user: How did that compare to the 2022/23 season?
+
+Merged output:
+{{"schema_version":1,"primary_goal":"Understand Arsenal 2023/24 defence","current_intent":"season-over-season defensive comparison","conversation_stage":"comparison","facts":{{"formation":"4-3-3","goals_conceded":44,"comparison_season":"2022/23"}},"filled_slots":{{}},"missing_slots":["2022/23 goals conceded"],"constraints":["Premier League focus"],"entities":{{"players":[],"clubs":["Arsenal"],"competitions":["Premier League"],"seasons":["2023/24","2022/23"]}},"topics_discussed":["formation","season comparison"],"open_questions":["How did 2023/24 defensive record compare to 2022/23?"],"retrieval":{{"topics":["Arsenal defensive tactics"],"document_ids":[]}},"completed_actions":[],"pending_actions":["retrieve 2022/23 defensive stats"]}}
+
+[COMPRESSOR_USER]
+EXISTING SNAPSHOT (JSON, may be empty on first compression):
+{existing_snapshot}
+
+NEW MESSAGES TO INCORPORATE:
+{newly_aged_messages}
+
+Updated snapshot JSON:
 
 [ORCHESTRATOR_SYSTEM]
 Classify the following user query into exactly one of two categories:

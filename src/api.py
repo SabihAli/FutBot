@@ -149,21 +149,21 @@ def chat(request: ChatRequest):
     )
     session.add_message(user_msg)
 
-    # 2. Build rolling context (last 10 msgs, excluding the one we just added)
-    context_msgs = session.get_context_messages()
-    history_for_llm = [m.model_dump() for m in context_msgs[:-1]]
+    full_history = [{"role": m.role, "content": m.content} for m in session.messages]
 
-    # 3. Run the full LangGraph pipeline
     try:
-        reply = run_pipeline(
+        reply, snapshot, turn_count = run_pipeline(
             query=request.message,
-            context_messages=history_for_llm,
+            context_messages=full_history,
             session_id=request.session_id,
+            snapshot=session.snapshot,
+            snapshot_turn_count=session.snapshot_turn_count,
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-    # 4. Record assistant reply
+    session.snapshot = snapshot
+    session.snapshot_turn_count = turn_count
     bot_msg = Message(
         role="assistant",
         content=reply,
