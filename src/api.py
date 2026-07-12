@@ -33,8 +33,10 @@ from src.db_logger import (
     update_ingestion_event,
     get_ingestion_event,
 )
+from futbot_common import CorrelationIdMiddleware
 
 app = FastAPI(title="FutBot API")
+app.add_middleware(CorrelationIdMiddleware)
 
 # ---------------------------------------------------------------------------
 # Global State

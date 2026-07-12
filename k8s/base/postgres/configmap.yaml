@@ -1,0 +1,8 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: postgres-config
+  namespace: futbot
+data:
+  POSTGRES_USER: futbot
+  POSTGRES_DB: futbot
