@@ -14,6 +14,7 @@ from src.llm_components import (
 from src.context import ConversationContext
 from src.retriever import reciprocal_rank_fusion
 from src.db_logger import PipelineRunLogger, log_pipeline_trace
+from src.pipeline_events import emit_event
 
 from src.prompt_loader import get_prompt, get_prompt_parts
 
@@ -49,10 +50,47 @@ class GraphState(TypedDict, total=False):
     final_answer: str
 
 
+def _session_id(state: GraphState) -> str:
+    return state.get("session_id", "")
+
+
+def _iteration(state: GraphState) -> int:
+    return state.get("retry_count", 0) + 1
+
+
+def _emit_stage(state: GraphState, stage: str, status: str, details: Optional[Dict[str, Any]] = None) -> None:
+    sid = _session_id(state)
+    if not sid:
+        return
+    payload: Dict[str, Any] = {
+        "type": "stage_update",
+        "stage": stage,
+        "status": status,
+        "iteration": _iteration(state),
+    }
+    if details is not None:
+        payload["details"] = details
+    emit_event(sid, payload)
+
+
+def _chunk_previews(chunks: List[Dict[str, Any]], limit: int = 8) -> List[Dict[str, str]]:
+    previews = []
+    for c in chunks[:limit]:
+        meta = c.get("metadata", {}) if isinstance(c.get("metadata"), dict) else {}
+        doc = c.get("document", "") or ""
+        previews.append({
+            "chunk_id": str(c.get("chunk_id", "unknown")),
+            "title": str(meta.get("title", c.get("title", ""))),
+            "snippet": doc[:240] + ("…" if len(doc) > 240 else ""),
+        })
+    return previews
+
+
 # ---------------------------------------------------------------------------
 # Nodes
 # ---------------------------------------------------------------------------
 def compressor_node(state: GraphState) -> GraphState:
+    _emit_stage(state, "collecting_context", "active")
     run_logger = state.get("run_logger")
 
     ctx = ConversationContext.from_graph_fields(
@@ -64,10 +102,19 @@ def compressor_node(state: GraphState) -> GraphState:
 
     ctx.maintain_snapshot(SnapshotCompressor(), run_logger=run_logger)
 
-    return ctx.to_graph_fields()
+    result = ctx.to_graph_fields()
+    _emit_stage(state, "collecting_context", "complete", {
+        "snapshot": result.get("snapshot", "{}"),
+        "snapshot_turn_count": result.get("snapshot_turn_count", 0),
+        "hot_message_count": len(result.get("context_messages", [])),
+    })
+    return result
 
 
 def rewrite_node(state: GraphState) -> GraphState:
+    _emit_stage(state, "rewriting", "active", {
+        "snapshot": state.get("snapshot") or "{}",
+    })
     run_logger = state.get("run_logger")
     retry_count = state.get("retry_count", 0)
     iteration = retry_count + 1  # 1-indexed
@@ -75,10 +122,11 @@ def rewrite_node(state: GraphState) -> GraphState:
     rewriter = QueryRewriter()
     query = state.get("query", "")
     context = state.get("context_messages", [])
+    snapshot = state.get("snapshot") or "{}"
     rewritten = rewriter.rewrite(
         query,
         context,
-        snapshot=state.get("snapshot") or "{}",
+        snapshot=snapshot,
         run_logger=run_logger,
         iteration=iteration,
     )
@@ -97,6 +145,11 @@ def rewrite_node(state: GraphState) -> GraphState:
     traces = state.get("loop_traces", [])
     traces.append({"rewritten_query": rewritten})
 
+    _emit_stage(state, "rewriting", "complete", {
+        "rewritten_query": rewritten,
+        "snapshot": snapshot,
+    })
+
     return {
         "rewritten_query": rewritten,
         "loop_traces": traces,
@@ -104,6 +157,7 @@ def rewrite_node(state: GraphState) -> GraphState:
     }
 
 def orchestrator_node(state: GraphState) -> GraphState:
+    _emit_stage(state, "orchestrating", "active")
     run_logger = state.get("run_logger")
     iteration = state.get("retry_count", 0) + 1
 
@@ -113,9 +167,14 @@ def orchestrator_node(state: GraphState) -> GraphState:
         run_logger=run_logger,
         iteration=iteration,
     )
+    _emit_stage(state, "orchestrating", "complete", {
+        "classification": classification,
+        "rewritten_query": state.get("rewritten_query", ""),
+    })
     return {"classification": classification}
 
 def simple_responder_node(state: GraphState) -> GraphState:
+    _emit_stage(state, "responding", "active")
     run_logger = state.get("run_logger")
     iteration = state.get("retry_count", 0) + 1
 
@@ -130,9 +189,13 @@ def simple_responder_node(state: GraphState) -> GraphState:
         system_prompt=system_prompt,
     )
 
+    _emit_stage(state, "responding", "complete", {"response": answer})
     return {"final_answer": answer}
 
 def retrieve_node(state: GraphState) -> GraphState:
+    _emit_stage(state, "retrieving", "active", {
+        "query": state.get("rewritten_query", ""),
+    })
     run_logger = state.get("run_logger")
     query = state.get("rewritten_query", "")
     iteration = state.get("retry_count", 0) + 1
@@ -176,9 +239,18 @@ def retrieve_node(state: GraphState) -> GraphState:
     if traces:
         traces[-1]["retrieved_chunk_ids"] = chunk_ids
 
+    _emit_stage(state, "retrieving", "complete", {
+        "query": query,
+        "dense_count": len(dense_results),
+        "sparse_count": len(sparse_results),
+        "chunk_count": len(chunks),
+        "chunks": _chunk_previews(chunks),
+    })
+
     return {"retrieved_chunks": chunks, "loop_traces": traces}
 
 def draft_node(state: GraphState) -> GraphState:
+    _emit_stage(state, "drafting", "active")
     run_logger = state.get("run_logger")
     iteration = state.get("retry_count", 0) + 1
 
@@ -189,9 +261,11 @@ def draft_node(state: GraphState) -> GraphState:
         run_logger=run_logger,
         iteration=iteration,
     )
+    _emit_stage(state, "drafting", "complete", {"draft_answer": draft})
     return {"draft_answer": draft}
 
 def judge_node(state: GraphState) -> GraphState:
+    _emit_stage(state, "judging", "active")
     run_logger = state.get("run_logger")
     iteration = state.get("retry_count", 0) + 1
     iteration_id = state.get("current_iteration_id")
@@ -227,6 +301,16 @@ def judge_node(state: GraphState) -> GraphState:
             logger.warning(f"Failed to update iteration: {e}")
 
     reached_max = (status == "FAIL" and current_retries >= 2)
+    will_retry = status == "FAIL" and current_retries < 2
+
+    _emit_stage(state, "judging", "complete", {
+        "judge_status": status,
+        "judge_reasoning": reasoning,
+        "retry_count": current_retries + 1,
+        "will_retry": will_retry,
+        "reached_max_retries": reached_max,
+        "loop_traces": traces,
+    })
 
     return {
         "judge_status": status,
@@ -362,5 +446,16 @@ def run_pipeline(
             )
         except Exception as e:
             logger.error(f"Failed to finalize run log: {e}")
+
+        if session_id:
+            emit_event(session_id, {
+                "type": "pipeline_complete",
+                "reply": answer,
+                "classification": result.get("classification", "UNKNOWN"),
+                "total_iterations": result.get("retry_count", 0),
+                "loop_traces": result.get("loop_traces", []),
+                "reached_max_retries": bool(result.get("reached_max_retries")),
+                "snapshot": result_snapshot,
+            })
 
     return answer, result_snapshot, result_turn_count

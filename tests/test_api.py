@@ -32,8 +32,18 @@ def test_ingest_endpoint(mocker):
     mocker.patch("src.api.global_bm25.build_index")
     mocker.patch("src.api.global_bm25.save")
 
-    # Mock chunk_text to return predictable chunks
-    mocker.patch("src.api.chunk_text", return_value=["chunk one", "chunk two"])
+    # Mock smart chunking so bootstrap test stays fast and deterministic
+    from src.ingestion.chunking.types import ChunkResult
+
+    fake_chunks = [
+        ChunkResult(text="chunk one", chunk_type="text", source_file="title", chunk_index=0, token_count=2),
+        ChunkResult(text="chunk two", chunk_type="text", source_file="title", chunk_index=1, token_count=2),
+    ]
+    mocker.patch("src.api.SmartChunker").return_value.chunk_article.return_value = fake_chunks
+    mocker.patch(
+        "src.api.chunked_to_index_payload",
+        return_value=(["chunk one", "chunk two"], ["bm25 one", "bm25 two"], [{}, {}], ["chunk_0", "chunk_1"]),
+    )
 
     response = client.post("/api/ingest")
     assert response.status_code == 200

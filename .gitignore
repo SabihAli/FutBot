@@ -3,9 +3,11 @@
 .coverage
 __pycache__/
 *.pyc
+.agents/
 .env
 *.csv
 .DS_Store
 db_dump.json
 trace_logs.db
 data/
+skills/*

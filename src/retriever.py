@@ -93,6 +93,14 @@ class BM25Retriever:
     def is_loaded(self) -> bool:
         return self._bm25 is not None
 
+    @property
+    def corpus(self) -> List[str]:
+        return self._corpus
+
+    @property
+    def chunk_ids(self) -> List[str]:
+        return self._chunk_ids
+
     def build_index(self, corpus: List[str], chunk_ids: List[str]) -> None:
         """Tokenizes and indexes the corpus for BM25 retrieval."""
         self._corpus = corpus

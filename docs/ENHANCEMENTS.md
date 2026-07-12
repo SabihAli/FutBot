@@ -15,7 +15,11 @@ This document details the architecture, design decisions, and implementation spe
 
 ---
 
+
+
 ## 1. Snapshot Context Maintenance
+
+
 
 ### Problem
 
@@ -27,6 +31,8 @@ A two-tier memory model replaces the current single-window approach:
 
 - **Hot Context:** The last 10 messages passed verbatim to the `QueryRewriter`. This number is configurable via the `HOT_CONTEXT_WINDOW` environment variable (default: `10`).
 - **Cold Context (Snapshot):** All messages older than the hot window are compressed into a running natural-language summary — the snapshot. The snapshot is stored directly in the session state dictionary alongside the message list and is updated eagerly on every turn where a message ages out of the hot window.
+
+
 
 ### Eager vs. Lazy Update Decision
 
@@ -55,8 +61,8 @@ A dedicated `SnapshotCompressor` function runs before the `QueryRewriter` node o
 1. Calculate `aged_messages = messages[:-HOT_CONTEXT_WINDOW]`
 2. If `len(aged_messages) == snapshot_turn_count`, the snapshot is current — skip compression.
 3. If `len(aged_messages) > snapshot_turn_count`, new messages have aged out. Re-compress:
-   - Pass the existing snapshot (if any) plus the newly aged-out messages to the compression prompt.
-   - The model incrementally updates the snapshot rather than reprocessing the entire history from scratch on every turn.
+  - Pass the existing snapshot (if any) plus the newly aged-out messages to the compression prompt.
+  - The model incrementally updates the snapshot rather than reprocessing the entire history from scratch on every turn.
 4. Store the result back to `session["snapshot"]` and update `snapshot_turn_count`.
 
 **Compression Model:** `qwen/qwen3.6-27b` in non-thinking mode. The same model used for rewriting and drafting — no additional dependency.
@@ -82,7 +88,7 @@ Update the summary to incorporate the new messages. The summary must:
 Return only the updated summary. No preamble.
 ```
 
-**`SNAPSHOT_MAX_TOKENS`** is a configurable environment variable (default: `300`). This caps snapshot size to protect the `QueryRewriter`'s context window, especially important given the 6,000–8,000 TPM limits on Groq's free tier.
+`SNAPSHOT_MAX_TOKENS` is a configurable environment variable (default: `300`). This caps snapshot size to protect the `QueryRewriter`'s context window, especially important given the 6,000–8,000 TPM limits on Groq's free tier.
 
 ### Updated QueryRewriter Prompt Structure
 
@@ -103,6 +109,8 @@ incorporates all relevant context from both the snapshot and recent messages.
 Return only the rewritten query. No explanation.
 ```
 
+
+
 ### Database Logging
 
 A new column `snapshot_text` is added to the `pipeline_runs` table to log the snapshot state at the time of each query. This enables post-hoc analysis of snapshot quality and debugging of context failures.
@@ -111,14 +119,20 @@ A new column `snapshot_text` is added to the `pipeline_runs` table to log the sn
 ALTER TABLE pipeline_runs ADD COLUMN snapshot_text TEXT;
 ```
 
+
+
 ### Environment Variables
 
-| Variable | Default | Description |
-|---|---|---|
-| `HOT_CONTEXT_WINDOW` | `10` | Number of most recent messages passed verbatim to the QueryRewriter |
-| `SNAPSHOT_MAX_TOKENS` | `300` | Maximum token length of the compressed snapshot |
+
+| Variable              | Default | Description                                                         |
+| --------------------- | ------- | ------------------------------------------------------------------- |
+| `HOT_CONTEXT_WINDOW`  | `10`    | Number of most recent messages passed verbatim to the QueryRewriter |
+| `SNAPSHOT_MAX_TOKENS` | `300`   | Maximum token length of the compressed snapshot                     |
+
 
 ---
+
+
 
 ## 2. Multi-Format File Ingestion with Football Relevance Guard
 
@@ -128,12 +142,14 @@ The existing `/api/ingest` endpoint accepts only structured JSON text. Users nee
 
 ### Supported File Formats
 
-| Format | Extensions | Extraction Method |
-|---|---|---|
-| Plain text | `.txt`, `.md` | Direct UTF-8 read |
-| PDF | `.pdf` | PyMuPDF (`fitz`) for text + embedded image extraction |
-| Spreadsheet | `.csv`, `.xlsx` | Pandas for tabular parsing → structured text conversion |
-| Image | `.jpg`, `.jpeg`, `.png`, `.webp` | Vision model (description) + Tesseract (OCR) — see below |
+
+| Format      | Extensions                       | Extraction Method                                        |
+| ----------- | -------------------------------- | -------------------------------------------------------- |
+| Plain text  | `.txt`, `.md`                    | Direct UTF-8 read                                        |
+| PDF         | `.pdf`                           | PyMuPDF (`fitz`) for text + embedded image extraction    |
+| Spreadsheet | `.csv`, `.xlsx`                  | Pandas for tabular parsing → structured text conversion  |
+| Image       | `.jpg`, `.jpeg`, `.png`, `.webp` | Vision model (description) + Tesseract (OCR) — see below |
+
 
 **Videos are explicitly out of scope.**
 
@@ -148,6 +164,8 @@ Upload → Format Extraction → Football Relevance Guard → Smart Chunking →
 Stages 4 and 5 (Smart Chunking and Embedding) are covered in detail in Section 4. This section covers Stages 1–3.
 
 ### Stage 1: Format Extraction
+
+
 
 #### Plain Text and Markdown
 
@@ -178,6 +196,8 @@ def extract_pdf(path: str) -> list[dict]:
     return blocks
 ```
 
+
+
 #### Spreadsheet Extraction
 
 Pandas loads `.csv` and `.xlsx` files. The conversion to indexable text follows this structure:
@@ -192,7 +212,7 @@ This format is retrievable by both the dense (semantic) and sparse (BM25 keyword
 
 Images undergo a mandatory two-pass extraction. Both passes run concurrently and their outputs are concatenated.
 
-**Pass 1 — Visual Description (`qwen/qwen3.6-27b` vision):**
+**Pass 1 — Visual Description (**`qwen/qwen3.6-27b` **vision):**
 
 The image is encoded as base64 and sent to `qwen/qwen3.6-27b` via Groq's multimodal API. The prompt is football-aware to maximise relevant description density:
 
@@ -207,6 +227,7 @@ Be specific. Do not speculate beyond what is visible.
 **Pass 2 — OCR (Tesseract):**
 
 Tesseract runs on the same image independently. The raw OCR output is post-processed:
+
 - Strip lines that are fewer than 3 characters (noise).
 - Strip lines with a confidence score below 60 (Tesseract's `--oem 3 --psm 6` mode).
 - If the remaining output is empty or all-noise, the `[TEXT IN IMAGE]` block is omitted entirely.
@@ -250,7 +271,7 @@ Respond with exactly one word: YES or NO.
 
 Only the first 1,000 characters of extracted text are sent to the classifier. This is sufficient for topic detection and avoids wasting TPM budget on long documents at this stage.
 
-**If the response is `NO`:**
+**If the response is** `NO`**:**
 
 A `FootballRelevanceError` is raised immediately. The file is not chunked, not embedded, and not indexed. The API returns a clear, descriptive error to the user:
 
@@ -262,7 +283,7 @@ A `FootballRelevanceError` is raised immediately. The file is not chunked, not e
 }
 ```
 
-**If the response is `YES`:** Extraction output proceeds to Stage 3 (Smart Chunking, Section 4) and then to embedding and indexing.
+**If the response is** `YES`**:** Extraction output proceeds to Stage 3 (Smart Chunking, Section 4) and then to embedding and indexing.
 
 ### API Changes
 
@@ -279,18 +300,24 @@ The endpoint auto-detects format from the file extension. Unsupported extensions
 
 ### Dependencies
 
-| Library | Purpose |
-|---|---|
-| `pymupdf` (`fitz`) | PDF text and image extraction |
-| `pandas` | CSV and XLSX parsing |
-| `openpyxl` | XLSX backend for Pandas |
-| `pytesseract` | Python wrapper for Tesseract OCR |
-| `Pillow` | Image preprocessing before Tesseract |
-| `tesseract-ocr` | System-level OCR binary (apt package) |
+
+| Library            | Purpose                               |
+| ------------------ | ------------------------------------- |
+| `pymupdf` (`fitz`) | PDF text and image extraction         |
+| `pandas`           | CSV and XLSX parsing                  |
+| `openpyxl`         | XLSX backend for Pandas               |
+| `pytesseract`      | Python wrapper for Tesseract OCR      |
+| `Pillow`           | Image preprocessing before Tesseract  |
+| `tesseract-ocr`    | System-level OCR binary (apt package) |
+
 
 ---
 
+
+
 ## 3. Groq API Provider Option
+
+
 
 ### Problem
 
@@ -315,31 +342,41 @@ def invoke_llm(role: str, prompt: str, image: bytes | None = None) -> str:
         return _call_local(LOCAL_MODEL_MAP[role], prompt)
 ```
 
+
+
 ### Model Mapping
+
+
 
 #### Current Local Models (unchanged)
 
-| Role | Local Model |
-|---|---|
-| Orchestrator / Classifier | `Qwen3.5-0.8B` |
-| Query Rewriter, Draft Generator, Simple Responder, Snapshot Compressor | `Qwen3.5-2B` |
-| Decision Judge | `Qwen3.5-4B` |
+
+| Role                                                                   | Local Model    |
+| ---------------------------------------------------------------------- | -------------- |
+| Orchestrator / Classifier                                              | `Qwen3.5-0.8B` |
+| Query Rewriter, Draft Generator, Simple Responder, Snapshot Compressor | `Qwen3.5-2B`   |
+| Decision Judge                                                         | `Qwen3.5-4B`   |
+
+
+
 
 #### Groq Models
 
-| Role | Groq Model | Rationale |
-|---|---|---|
-| Orchestrator / Classifier | `openai/gpt-oss-20b` | Fast, capable of binary classification, separate daily request budget from the primary model |
-| Query Rewriter | `qwen/qwen3.6-27b` (non-thinking) | Best intelligence score on Groq free tier, 262K context window |
-| Snapshot Compressor | `qwen/qwen3.6-27b` (non-thinking) | Same model, concise summarisation task |
-| Simple Responder | `qwen/qwen3.6-27b` (non-thinking) | Conversational responses do not require thinking mode |
-| Draft Generator | `qwen/qwen3.6-27b` (non-thinking) | Streamed live to the user (see Section 5) |
-| Decision Judge | `qwen/qwen3.6-27b` (thinking mode) | Fact-checking requires rigorous reasoning; thinking mode is toggled ON for this role only |
-| Vision (image description) | `qwen/qwen3.6-27b` (multimodal) | Natively accepts image inputs; no separate vision model required |
 
-**Why `qwen/qwen3.6-27b` for most roles:** As of June 2026, `qwen/qwen3-32b` has been deprecated by Groq in favour of `qwen/qwen3.6-27b`, which is the current highest-intelligence model on the free tier. It supports switchable thinking/non-thinking modes within a single model, multimodal image input, a 262K context window, tool use, and JSON mode. Using one model for most roles simplifies the codebase and avoids splitting the daily request budget across multiple model quotas.
+| Role                       | Groq Model                         | Rationale                                                                                    |
+| -------------------------- | ---------------------------------- | -------------------------------------------------------------------------------------------- |
+| Orchestrator / Classifier  | `openai/gpt-oss-20b`               | Fast, capable of binary classification, separate daily request budget from the primary model |
+| Query Rewriter             | `qwen/qwen3.6-27b` (non-thinking)  | Best intelligence score on Groq free tier, 262K context window                               |
+| Snapshot Compressor        | `qwen/qwen3.6-27b` (non-thinking)  | Same model, concise summarisation task                                                       |
+| Simple Responder           | `qwen/qwen3.6-27b` (non-thinking)  | Conversational responses do not require thinking mode                                        |
+| Draft Generator            | `qwen/qwen3.6-27b` (non-thinking)  | Streamed live to the user (see Section 5)                                                    |
+| Decision Judge             | `qwen/qwen3.6-27b` (thinking mode) | Fact-checking requires rigorous reasoning; thinking mode is toggled ON for this role only    |
+| Vision (image description) | `qwen/qwen3.6-27b` (multimodal)    | Natively accepts image inputs; no separate vision model required                             |
 
-**Why `openai/gpt-oss-20b` for the Orchestrator:** Offloading binary `SIMPLE`/`KNOWLEDGE` classification to a separate model distributes the daily request budget. The orchestrator fires on every single query, so using `qwen3.6-27b` for it would consume a disproportionate share of the 1,000 RPD quota.
+
+**Why** `qwen/qwen3.6-27b` **for most roles:** As of June 2026, `qwen/qwen3-32b` has been deprecated by Groq in favour of `qwen/qwen3.6-27b`, which is the current highest-intelligence model on the free tier. It supports switchable thinking/non-thinking modes within a single model, multimodal image input, a 262K context window, tool use, and JSON mode. Using one model for most roles simplifies the codebase and avoids splitting the daily request budget across multiple model quotas.
+
+**Why** `openai/gpt-oss-20b` **for the Orchestrator:** Offloading binary `SIMPLE`/`KNOWLEDGE` classification to a separate model distributes the daily request budget. The orchestrator fires on every single query, so using `qwen3.6-27b` for it would consume a disproportionate share of the 1,000 RPD quota.
 
 ### Thinking Mode Control
 
@@ -359,21 +396,25 @@ The existing `<think>` tag stripping logic in `invoke_llm()` carries over unchan
 
 Groq free tier limits (as of June 2026):
 
-| Model | RPM | TPM | RPD |
-|---|---|---|---|
-| `qwen/qwen3.6-27b` | 30 | 8,000 | 1,000 |
-| `openai/gpt-oss-20b` | 30 | 8,000 | 1,000 |
+
+| Model                | RPM | TPM   | RPD   |
+| -------------------- | --- | ----- | ----- |
+| `qwen/qwen3.6-27b`   | 30  | 8,000 | 1,000 |
+| `openai/gpt-oss-20b` | 30  | 8,000 | 1,000 |
+
 
 **Rate limit analysis:** A single worst-case user query (knowledge path, 3 retries) makes approximately:
 
-| Call | Model | Count |
-|---|---|---|
-| Snapshot Compressor (if triggered) | `qwen3.6-27b` | 0–1 |
-| Query Rewriter | `qwen3.6-27b` | 1–3 (retries) |
-| Orchestrator | `gpt-oss-20b` | 1 |
-| Draft Generator | `qwen3.6-27b` | 1–3 (retries) |
-| Decision Judge | `qwen3.6-27b` | 1–3 (retries) |
-| **Total (worst case)** | | **~10 calls** |
+
+| Call                               | Model         | Count         |
+| ---------------------------------- | ------------- | ------------- |
+| Snapshot Compressor (if triggered) | `qwen3.6-27b` | 0–1           |
+| Query Rewriter                     | `qwen3.6-27b` | 1–3 (retries) |
+| Orchestrator                       | `gpt-oss-20b` | 1             |
+| Draft Generator                    | `qwen3.6-27b` | 1–3 (retries) |
+| Decision Judge                     | `qwen3.6-27b` | 1–3 (retries) |
+| **Total (worst case)**             |               | **~10 calls** |
+
 
 At 1,000 RPD per model, the `qwen3.6-27b` budget supports approximately **100 worst-case queries per day**, which is appropriate for a personal or demo-scale deployment.
 
@@ -400,16 +441,22 @@ The `retry-after` header returned by Groq is used directly when available, as it
 
 ### Environment Variables
 
-| Variable | Default | Description |
-|---|---|---|
-| `LLM_PROVIDER` | `local` | `local` or `groq` |
-| `GROQ_API_KEY` | — | Required when `LLM_PROVIDER=groq` |
-| `GROQ_MAX_RETRIES` | `5` | Maximum retry attempts on 429 |
-| `GROQ_BACKOFF_BASE` | `1.5` | Base seconds for exponential backoff |
+
+| Variable            | Default | Description                          |
+| ------------------- | ------- | ------------------------------------ |
+| `LLM_PROVIDER`      | `local` | `local` or `groq`                    |
+| `GROQ_API_KEY`      | —       | Required when `LLM_PROVIDER=groq`    |
+| `GROQ_MAX_RETRIES`  | `5`     | Maximum retry attempts on 429        |
+| `GROQ_BACKOFF_BASE` | `1.5`   | Base seconds for exponential backoff |
+
 
 ---
 
+
+
 ## 4. Smart Chunking
+
+
 
 ### Problem
 
@@ -428,7 +475,7 @@ Sentence-boundary-aware chunking using `nltk.sent_tokenize`:
 3. Never split mid-sentence. If adding the next sentence would exceed the target, close the current chunk and start a new one.
 4. Apply a sliding overlap of `CHUNK_OVERLAP_SENTENCES` sentences (default: `2`) between consecutive chunks to preserve cross-boundary context.
 
-**Why `nltk` over `spaCy`:** `nltk.sent_tokenize` is lightweight, has no model download requirement at runtime, and is sufficient for English football text. `spaCy` is not justified for sentence splitting alone.
+**Why** `nltk` **over** `spaCy`**:** `nltk.sent_tokenize` is lightweight, has no model download requirement at runtime, and is sufficient for English football text. `spaCy` is not justified for sentence splitting alone.
 
 #### PDFs
 
@@ -491,15 +538,21 @@ When new files are ingested, the BM25 index must be rebuilt or incrementally upd
 
 ### Environment Variables
 
-| Variable | Default | Description |
-|---|---|---|
-| `CHUNK_TARGET_TOKENS` | `400` | Target token count per chunk (plain text and PDFs) |
-| `CHUNK_OVERLAP_SENTENCES` | `2` | Sentence overlap between consecutive plain text chunks |
-| `TABLE_CHUNK_ROWS` | `10` | Number of data rows per table chunk |
+
+| Variable                  | Default | Description                                            |
+| ------------------------- | ------- | ------------------------------------------------------ |
+| `CHUNK_TARGET_TOKENS`     | `400`   | Target token count per chunk (plain text and PDFs)     |
+| `CHUNK_OVERLAP_SENTENCES` | `2`     | Sentence overlap between consecutive plain text chunks |
+| `TABLE_CHUNK_ROWS`        | `10`    | Number of data rows per table chunk                    |
+
 
 ---
 
+
+
 ## 5. Real-Time Token Streaming
+
+
 
 ### Problem
 
@@ -534,7 +587,11 @@ Draft Generator begins streaming
                     New draft streams
 ```
 
+
+
 ### Backend Implementation
+
+
 
 #### FastAPI StreamingResponse
 
@@ -579,6 +636,8 @@ data: {"type": "simple", "content": "Sure, I can help with that!"}
 data: {"type": "done"}
 ```
 
+
+
 #### Concurrent Streaming and Buffer Accumulation
 
 When the Draft Generator runs in Groq streaming mode, the server simultaneously forwards tokens to the client and accumulates them in a buffer string. The Decision Judge receives this buffer after streaming completes:
@@ -600,6 +659,8 @@ async def stream_and_accumulate(groq_stream) -> AsyncGenerator[str, None]:
     else:
         yield f'data: {{"type": "retry", "attempt": attempt + 1}}\n\n'
 ```
+
+
 
 #### Retry Behaviour
 
@@ -639,6 +700,8 @@ async function sendMessage(query) {
 }
 ```
 
+
+
 #### Event Handling and Visual Treatment
 
 ```javascript
@@ -672,12 +735,16 @@ function handleEvent(event, bubble) {
 }
 ```
 
+
+
 #### Visual Design
 
 - **Tentative draft (streaming):** `opacity: 0.45`, blinking cursor at end of text, subtle "verifying..." label in muted text below the bubble.
 - **Verified draft:** Smooth CSS transition `opacity: 1.0` over 200ms, cursor removed, status label fades out.
 - **Retry:** Draft text fades out over 150ms and is removed. Status label updates to "Retrying...".
 - **Thinking indicator:** During the Orchestrator and Query Rewriter phases (before streaming begins), a pulsing three-dot indicator is shown in the chat area to signal that the pipeline is active.
+
+
 
 ### Groq Streaming API
 
@@ -698,20 +765,26 @@ The local Ollama path also supports streaming via its `/api/generate` endpoint w
 
 ---
 
+
+
 ## 6. Cross-Cutting Concerns
+
+
 
 ### Token Budget Awareness
 
 Several enhancements add LLM calls to the pipeline. The cumulative impact on Groq's free tier TPM limit (8,000 tokens/minute for `qwen3.6-27b`) should be understood:
 
-| Node | Typical Token Usage | Mode |
-|---|---|---|
-| Snapshot Compressor (when triggered) | ~500 input + 300 output | Non-thinking |
-| Query Rewriter | ~400 input + 80 output | Non-thinking |
-| Orchestrator | ~100 input + 5 output | Non-thinking |
-| Draft Generator | ~1,500 input + 400 output | Non-thinking, streamed |
-| Decision Judge | ~2,000 input + 100 output | Thinking |
-| **Per-query total (approx.)** | **~5,385 tokens** | |
+
+| Node                                 | Typical Token Usage       | Mode                   |
+| ------------------------------------ | ------------------------- | ---------------------- |
+| Snapshot Compressor (when triggered) | ~500 input + 300 output   | Non-thinking           |
+| Query Rewriter                       | ~400 input + 80 output    | Non-thinking           |
+| Orchestrator                         | ~100 input + 5 output     | Non-thinking           |
+| Draft Generator                      | ~1,500 input + 400 output | Non-thinking, streamed |
+| Decision Judge                       | ~2,000 input + 100 output | Thinking               |
+| **Per-query total (approx.)**        | **~5,385 tokens**         |                        |
+
 
 This approaches the 8,000 TPM limit in a single query when the Snapshot Compressor fires. The practical implication: back-to-back queries may occasionally trigger a 429, handled by the retry/backoff logic in Section 3. This is expected behaviour for the free tier.
 

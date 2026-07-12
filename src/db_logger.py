@@ -11,6 +11,7 @@ Schema (normalized):
   retrieved_chunks    – one row per chunk returned in a retrieval event
 """
 
+import hashlib
 import sqlite3
 import os
 import time
@@ -109,7 +110,63 @@ def init_db():
 
     conn.commit()
     _migrate_pipeline_runs_schema(conn)
+    _migrate_ingestion_events_schema(conn)
+    _migrate_ingestion_chunks_schema(conn)
     conn.close()
+
+
+def _migrate_ingestion_events_schema(conn: sqlite3.Connection):
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS ingestion_events (
+            id                INTEGER PRIMARY KEY AUTOINCREMENT,
+            filename          TEXT NOT NULL,
+            file_type         TEXT NOT NULL,
+            status            TEXT NOT NULL,
+            chunk_count       INTEGER,
+            relevance_verdict TEXT,
+            error             TEXT,
+            duration_ms       INTEGER,
+            images_total      INTEGER,
+            images_processed  INTEGER,
+            ingested_at       TEXT DEFAULT (datetime('now'))
+        )
+    """)
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(ingestion_events)").fetchall()}
+    if "images_total" not in columns:
+        conn.execute("ALTER TABLE ingestion_events ADD COLUMN images_total INTEGER")
+    if "images_processed" not in columns:
+        conn.execute("ALTER TABLE ingestion_events ADD COLUMN images_processed INTEGER")
+    if "content_hash" not in columns:
+        conn.execute("ALTER TABLE ingestion_events ADD COLUMN content_hash TEXT")
+    conn.execute(
+        """CREATE UNIQUE INDEX IF NOT EXISTS idx_ingestion_events_content_hash
+           ON ingestion_events(content_hash)
+           WHERE content_hash IS NOT NULL AND status IN ('success', 'processing')"""
+    )
+    conn.commit()
+
+
+def _migrate_ingestion_chunks_schema(conn: sqlite3.Connection):
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS ingestion_chunks (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            ingestion_id    INTEGER NOT NULL REFERENCES ingestion_events(id),
+            chunk_index     INTEGER NOT NULL,
+            chunk_id        TEXT NOT NULL,
+            chunk_text      TEXT NOT NULL,
+            chunk_type      TEXT,
+            section_heading TEXT,
+            page_number     INTEGER,
+            sheet_name      TEXT,
+            token_count     INTEGER,
+            created_at      TEXT DEFAULT (datetime('now'))
+        )
+    """)
+    conn.execute(
+        """CREATE INDEX IF NOT EXISTS idx_ingestion_chunks_ingestion_id
+           ON ingestion_chunks(ingestion_id)"""
+    )
+    conn.commit()
 
 
 def _migrate_pipeline_runs_schema(conn: sqlite3.Connection):
@@ -350,6 +407,206 @@ def log_pipeline_trace(
             total_iterations=total_iterations,
             final_answer=final_answer,
         )
+
+
+# ---------------------------------------------------------------------------
+# Ingestion event logging
+# ---------------------------------------------------------------------------
+
+def compute_content_hash(file_bytes: bytes) -> str:
+    return hashlib.sha256(file_bytes).hexdigest()
+
+
+def find_duplicate_ingestion(content_hash: str) -> Optional[Dict[str, Any]]:
+    """Return an existing ingestion if the same content is already indexed or in-flight."""
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        row = conn.execute(
+            """SELECT id, filename, status
+               FROM ingestion_events
+               WHERE content_hash = ? AND status IN ('success', 'processing')
+               ORDER BY id DESC
+               LIMIT 1""",
+            (content_hash,),
+        ).fetchone()
+        if row is None:
+            return None
+        return {"id": row[0], "filename": row[1], "status": row[2]}
+    finally:
+        conn.close()
+
+
+def create_ingestion_event(
+    filename: str,
+    file_type: str,
+    status: str,
+    chunk_count: Optional[int] = None,
+    relevance_verdict: Optional[str] = None,
+    error: Optional[str] = None,
+    duration_ms: Optional[int] = None,
+    images_total: Optional[int] = None,
+    images_processed: Optional[int] = None,
+    content_hash: Optional[str] = None,
+) -> int:
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        cursor = conn.execute(
+            """INSERT INTO ingestion_events
+               (filename, file_type, status, chunk_count, relevance_verdict, error,
+                duration_ms, images_total, images_processed, content_hash)
+               VALUES (?,?,?,?,?,?,?,?,?,?)""",
+            (
+                filename, file_type, status, chunk_count, relevance_verdict, error,
+                duration_ms, images_total, images_processed, content_hash,
+            ),
+        )
+        conn.commit()
+        return int(cursor.lastrowid)
+    finally:
+        conn.close()
+
+
+def log_ingestion_chunks(
+    ingestion_id: int,
+    chunk_texts: list[str],
+    metadatas: list[dict[str, Any]],
+    chunk_ids: list[str],
+) -> None:
+    if not chunk_texts:
+        return
+
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        conn.execute("PRAGMA foreign_keys = ON")
+        rows = []
+        for idx, (chunk_id, text, meta) in enumerate(
+            zip(chunk_ids, chunk_texts, metadatas)
+        ):
+            page_number = meta.get("page_number")
+            rows.append((
+                ingestion_id,
+                meta.get("chunk_index", idx),
+                chunk_id,
+                text,
+                meta.get("chunk_type"),
+                meta.get("section_heading") or None,
+                page_number if page_number is not None and page_number >= 0 else None,
+                meta.get("sheet_name"),
+                meta.get("token_count"),
+            ))
+        conn.executemany(
+            """INSERT INTO ingestion_chunks
+               (ingestion_id, chunk_index, chunk_id, chunk_text, chunk_type,
+                section_heading, page_number, sheet_name, token_count)
+               VALUES (?,?,?,?,?,?,?,?,?)""",
+            rows,
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_ingestion_chunks(ingestion_id: int) -> list[Dict[str, Any]]:
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        rows = conn.execute(
+            """SELECT id, ingestion_id, chunk_index, chunk_id, chunk_text, chunk_type,
+                      section_heading, page_number, sheet_name, token_count, created_at
+               FROM ingestion_chunks
+               WHERE ingestion_id = ?
+               ORDER BY chunk_index""",
+            (ingestion_id,),
+        ).fetchall()
+        return [
+            {
+                "id": row[0],
+                "ingestion_id": row[1],
+                "chunk_index": row[2],
+                "chunk_id": row[3],
+                "chunk_text": row[4],
+                "chunk_type": row[5],
+                "section_heading": row[6],
+                "page_number": row[7],
+                "sheet_name": row[8],
+                "token_count": row[9],
+                "created_at": row[10],
+            }
+            for row in rows
+        ]
+    finally:
+        conn.close()
+
+
+def update_ingestion_event(event_id: int, **fields):
+    allowed = {
+        "status", "file_type", "chunk_count", "relevance_verdict",
+        "error", "duration_ms", "images_total", "images_processed",
+    }
+    updates = {k: v for k, v in fields.items() if k in allowed}
+    if not updates:
+        return
+
+    set_clause = ", ".join(f"{key} = ?" for key in updates)
+    values = list(updates.values()) + [event_id]
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        conn.execute(
+            f"UPDATE ingestion_events SET {set_clause} WHERE id = ?",
+            values,
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_ingestion_event(event_id: int) -> Optional[Dict[str, Any]]:
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        row = conn.execute(
+            """SELECT id, filename, file_type, status, chunk_count, relevance_verdict,
+                      error, duration_ms, images_total, images_processed, ingested_at,
+                      content_hash
+               FROM ingestion_events WHERE id = ?""",
+            (event_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        return {
+            "id": row[0],
+            "filename": row[1],
+            "file_type": row[2],
+            "status": row[3],
+            "chunk_count": row[4],
+            "relevance_verdict": row[5],
+            "error": row[6],
+            "duration_ms": row[7],
+            "images_total": row[8],
+            "images_processed": row[9],
+            "ingested_at": row[10],
+            "content_hash": row[11],
+        }
+    finally:
+        conn.close()
+
+
+def log_ingestion_event(
+    filename: str,
+    file_type: str,
+    status: str,
+    chunk_count: Optional[int] = None,
+    relevance_verdict: Optional[str] = None,
+    error: Optional[str] = None,
+    duration_ms: Optional[int] = None,
+) -> int:
+    return create_ingestion_event(
+        filename=filename,
+        file_type=file_type,
+        status=status,
+        chunk_count=chunk_count,
+        relevance_verdict=relevance_verdict,
+        error=error,
+        duration_ms=duration_ms,
+    )
 
 
 # ---------------------------------------------------------------------------

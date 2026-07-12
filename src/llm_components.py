@@ -51,6 +51,8 @@ _GROQ_MODEL_ORCHESTRATOR = os.environ.get("GROQ_MODEL_ORCHESTRATOR", "openai/gpt
 # Maps the `step` argument from invoke_llm() to the Groq model slug.
 GROQ_MODEL_MAP: Dict[str, str] = {
     "orchestrator":     _GROQ_MODEL_ORCHESTRATOR,  # separate budget from main model
+    "classifier":       _GROQ_MODEL_ORCHESTRATOR,
+    "vision":           _GROQ_MODEL_MAIN,
     "rewriter":         _GROQ_MODEL_MAIN,
     "compressor":       _GROQ_MODEL_MAIN,
     "drafter":          _GROQ_MODEL_MAIN,
