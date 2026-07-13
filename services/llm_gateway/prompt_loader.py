@@ -1,0 +1,42 @@
+import os
+import re
+from pathlib import Path
+
+_PROMPTS_FILE = Path(__file__).resolve().parent / "prompts.txt"
+_prompts_cache: dict[str, str] = {}
+
+
+def load_prompts() -> dict[str, str]:
+    global _prompts_cache
+    if _prompts_cache:
+        return _prompts_cache
+    if not _PROMPTS_FILE.is_file():
+        raise FileNotFoundError(f"Prompts file not found at {_PROMPTS_FILE}")
+    content = _PROMPTS_FILE.read_text(encoding="utf-8")
+    blocks = re.split(r"^\[([A-Z_]+)\]\s*$", content, flags=re.MULTILINE)
+    for i in range(1, len(blocks), 2):
+        _prompts_cache[blocks[i]] = blocks[i + 1].strip()
+    return _prompts_cache
+
+
+def get_prompt(name: str) -> str:
+    prompts = load_prompts()
+    if name not in prompts:
+        raise KeyError(f"Prompt '{name}' not found in prompts.txt")
+    return prompts[name]
+
+
+def get_prompt_parts(name: str) -> tuple[str, str]:
+    prompts = load_prompts()
+    system_key = f"{name}_SYSTEM"
+    user_key = f"{name}_USER"
+    if system_key not in prompts:
+        raise KeyError(f"System prompt '{system_key}' not found in prompts.txt")
+    if user_key not in prompts:
+        raise KeyError(f"User prompt '{user_key}' not found in prompts.txt")
+    return prompts[system_key], prompts[user_key]
+
+
+def clear_prompts_cache_for_tests() -> None:
+    global _prompts_cache
+    _prompts_cache = {}

@@ -6,8 +6,9 @@ from src.config import INGEST_IMAGE_DELAY_MS
 from src.ingestion.errors import IngestionProviderError
 from src.ingestion.extractors.ocr import ocr_image
 from src.ingestion.types import ExtractedBlock
-from src.llm_components import LLM_PROVIDER, MODEL_GENERATOR, invoke_llm
-from src.prompt_loader import get_prompt_parts
+from services.llm_gateway.config import settings as llm_settings
+from services.llm_gateway.prompt_loader import get_prompt_parts
+from services.llm_gateway.provider import MODEL_GENERATOR, invoke_llm
 
 logger = logging.getLogger(__name__)
 
@@ -15,7 +16,7 @@ _IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
 
 
 def _describe_image(image_bytes: bytes) -> str:
-    if LLM_PROVIDER != "groq":
+    if llm_settings.llm_provider != "groq":
         raise IngestionProviderError()
 
     system_prompt, user_prompt = get_prompt_parts("VISION")
@@ -31,7 +32,7 @@ def _describe_image(image_bytes: bytes) -> str:
 
 def process_image(image_bytes: bytes) -> str:
     """Two-pass extraction: VLM description and OCR, run concurrently."""
-    if LLM_PROVIDER != "groq":
+    if llm_settings.llm_provider != "groq":
         raise IngestionProviderError()
 
     with ThreadPoolExecutor(max_workers=2) as executor:

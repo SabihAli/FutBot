@@ -1,3 +1,3 @@
-from futbot_common import create_stub_app
+from services.llm_gateway.app import app
 
-app = create_stub_app("llm-gateway")
+__all__ = ["app"]

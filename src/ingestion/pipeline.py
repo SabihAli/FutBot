@@ -8,7 +8,7 @@ from src.ingestion.extractors.pdf import count_pdf_vlm_work
 from src.ingestion.extractors.registry import extract_file, get_extension, get_file_type, get_relevance_sample
 from src.ingestion.indexer import index_blocks
 from src.ingestion.relevance import enforce_football_relevance
-from src.llm_components import LLM_PROVIDER
+from services.llm_gateway.config import settings as llm_settings
 from src.retriever import BM25Retriever, ChromaRetriever
 
 
@@ -25,7 +25,7 @@ def ingest_from_path(
     bm25: BM25Retriever,
     ingestion_id: int | None = None,
 ) -> dict:
-    if LLM_PROVIDER != "groq":
+    if llm_settings.llm_provider != "groq":
         raise IngestionProviderError()
 
     started = time.monotonic()

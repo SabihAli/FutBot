@@ -2,8 +2,8 @@ import logging
 from typing import Literal
 
 from src.ingestion.errors import FootballRelevanceError
-from src.llm_components import MODEL_ORCHESTRATOR, invoke_llm
-from src.prompt_loader import get_prompt_parts
+from services.llm_gateway.prompt_loader import get_prompt_parts
+from services.llm_gateway.provider import MODEL_ORCHESTRATOR, invoke_llm
 
 logger = logging.getLogger(__name__)
 

@@ -22,4 +22,5 @@ resources:
   - auth/deployment.yaml
   - chat/deployment.yaml
   - project/deployment.yaml
+  - llm-gateway/deployment.yaml
   - gateway/deployment.yaml

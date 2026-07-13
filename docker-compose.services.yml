@@ -1,6 +1,6 @@
 version: "3.8"
 
-# Phase 2 services — use with infra:
+# Phase 3 services — use with infra + optional legacy api for local RAG dev:
 #   docker compose -f docker-compose.infra.yml -f docker-compose.services.yml up -d
 
 services:
@@ -52,13 +52,29 @@ services:
     environment:
       DATABASE_URL: postgresql+asyncpg://futbot:futbot@postgres:5432/futbot
       PROJECT_SERVICE_URL: http://project:8083
+      LLM_GATEWAY_URL: http://llm-gateway:8087
       CONTEXT_BUDGET_TOKENS: ${CONTEXT_BUDGET_TOKENS:-8192}
       AUTO_COMPRESS_THRESHOLD_PCT: ${AUTO_COMPRESS_THRESHOLD_PCT:-85}
     depends_on:
       postgres:
         condition: service_healthy
+      llm-gateway:
+        condition: service_started
     ports:
       - "8082:8082"
+
+  llm-gateway:
+    build:
+      context: .
+      dockerfile: services/llm_gateway/Dockerfile
+    env_file:
+      - .env
+    environment:
+      LLM_PROVIDER: ${LLM_PROVIDER:-local}
+      GROQ_API_KEY: ${GROQ_API_KEY:-}
+      LLM_RATE_LIMIT_RPM: ${LLM_RATE_LIMIT_RPM:-60}
+    ports:
+      - "8087:8087"
 
   project:
     build:
