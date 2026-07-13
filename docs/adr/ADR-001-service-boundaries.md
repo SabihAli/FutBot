@@ -46,7 +46,7 @@ FutBot will be decomposed into bounded-context microservices behind an API Gatew
 
 ## Migration strategy
 
-Strangler pattern: monolith remains authoritative for RAG until each service passes parity tests. Phase order: Gateway+Auth → Chat+Project → LLM Gateway → Retrieval → Ingestion → Orchestrator+Realtime+Observability → Tools.
+Extract-in-place: move `src/` modules into `services/`, delete from monolith, gateway routes only to microservices. Phase order: Auth → Chat+Project → LLM → Retrieval → Ingestion → Orchestrator+Realtime+Observability → Tools → UI/Docs. Monolith deleted end of Phase 6.
 
 ## Consequences
 

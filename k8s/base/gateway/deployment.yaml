@@ -1,0 +1,87 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: gateway-config
+  namespace: futbot
+data:
+  AUTH_SERVICE_URL: "http://auth:8081"
+  CHAT_SERVICE_URL: "http://chat:8082"
+  PROJECT_SERVICE_URL: "http://project:8083"
+  ANON_MESSAGE_LIMIT: "10"
+
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: gateway-secret
+  namespace: futbot
+type: Opaque
+stringData:
+  JWT_SECRET: dev-secret-change-me
+  REDIS_URL: redis://redis:6379/0
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gateway
+  namespace: futbot
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: gateway
+  template:
+    metadata:
+      labels:
+        app: gateway
+    spec:
+      containers:
+        - name: gateway
+          image: futbot-gateway:local
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8000
+          envFrom:
+            - configMapRef:
+                name: gateway-config
+            - secretRef:
+                name: gateway-secret
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 3
+            periodSeconds: 5
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: gateway
+  namespace: futbot
+spec:
+  selector:
+    app: gateway
+  ports:
+    - port: 8000
+      targetPort: 8000
+
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: futbot-gateway
+  namespace: futbot
+spec:
+  rules:
+    - host: api.futbot.local
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: gateway
+                port:
+                  number: 8000

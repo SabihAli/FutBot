@@ -1,3 +1,3 @@
-from futbot_common import create_stub_app
+from services.gateway.app import create_app
 
-app = create_stub_app("gateway")
+app = create_app()

@@ -1,0 +1,62 @@
+version: "3.8"
+
+# Phase 1 services — use with infra:
+#   docker compose -f docker-compose.infra.yml -f docker-compose.services.yml up -d
+
+services:
+  auth:
+    build:
+      context: .
+      dockerfile: services/auth/Dockerfile
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://futbot:futbot@postgres:5432/futbot
+      REDIS_URL: redis://redis:6379/0
+      JWT_SECRET: ${JWT_SECRET:-dev-secret-change-me}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+      GOOGLE_REDIRECT_URI: ${GOOGLE_REDIRECT_URI:-http://localhost:8000/auth/oauth/google/callback}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - "8081:8081"
+
+  gateway:
+    build:
+      context: .
+      dockerfile: services/gateway/Dockerfile
+    env_file:
+      - .env
+    environment:
+      AUTH_SERVICE_URL: http://auth:8081
+      REDIS_URL: redis://redis:6379/0
+      JWT_SECRET: ${JWT_SECRET:-dev-secret-change-me}
+      ANON_MESSAGE_LIMIT: ${ANON_MESSAGE_LIMIT:-10}
+    depends_on:
+      - auth
+    ports:
+      - "8000:8000"
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: futbot
+      POSTGRES_PASSWORD: futbot
+      POSTGRES_DB: futbot
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U futbot"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
