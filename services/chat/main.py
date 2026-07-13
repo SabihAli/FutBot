@@ -1,3 +1,3 @@
-from futbot_common import create_stub_app
+from services.chat.app import app
 
-app = create_stub_app("chat")
+__all__ = ["app"]

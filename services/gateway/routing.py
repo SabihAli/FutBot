@@ -17,7 +17,7 @@ SERVICE_ROUTES: dict[str, str] = {
     "/tools": settings.tools_service_url,
 }
 
-ACTIVE_PREFIXES = ("/auth",)
+ACTIVE_PREFIXES = ("/auth", "/chats", "/projects")
 
 NOT_IMPLEMENTED_PREFIXES = (
     "/llm",

@@ -95,10 +95,6 @@ class ChatResponse(BaseModel):
     reply: str
 
 
-class SessionResponse(BaseModel):
-    session_id: str
-    messages: List[Dict[str, Any]]
-
 
 # ---------------------------------------------------------------------------
 # Endpoints
@@ -328,16 +324,6 @@ def ingest_csv_bootstrap():
         "articles_ingested": len(articles),
         "total_chunks_indexed": len(all_chunk_texts),
         "message": "Articles scraped, chunked, and fully indexed in Vector DB and BM25.",
-    }
-
-
-@app.get("/api/session/{session_id}", response_model=SessionResponse)
-def get_session_endpoint(session_id: str):
-    """Retrieve the full message history for a session (for UI history persistence)."""
-    session = get_session(session_id)
-    return {
-        "session_id": session.session_id,
-        "messages": [m.model_dump() for m in session.messages],
     }
 
 

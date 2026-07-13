@@ -2,7 +2,7 @@ import pytest
 from datetime import datetime, timezone
 from fastapi.testclient import TestClient
 from src.api import app, sessions_db
-from src.context import ConversationContext, Message
+from src.context import ConversationContext
 from src.data_layer import Article
 
 client = TestClient(app)
@@ -60,30 +60,6 @@ def test_ingest_no_articles(mocker):
     assert response.status_code == 200
     data = response.json()
     assert data["articles_ingested"] == 0
-
-
-# ---------------------------------------------------------------------------
-# GET /api/session/{session_id}
-# ---------------------------------------------------------------------------
-def test_get_session_new():
-    response = client.get("/api/session/session-123")
-    assert response.status_code == 200
-    data = response.json()
-    assert data["session_id"] == "session-123"
-    assert len(data["messages"]) == 0
-
-
-def test_get_session_existing():
-    msg = Message(role="user", content="Hello", timestamp=datetime.now(timezone.utc))
-    ctx = ConversationContext(session_id="session-456", messages=[msg])
-    sessions_db["session-456"] = ctx
-
-    response = client.get("/api/session/session-456")
-    assert response.status_code == 200
-    data = response.json()
-    assert data["session_id"] == "session-456"
-    assert len(data["messages"]) == 1
-    assert data["messages"][0]["content"] == "Hello"
 
 
 # ---------------------------------------------------------------------------

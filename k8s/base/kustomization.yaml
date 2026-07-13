@@ -20,4 +20,6 @@ resources:
   - qdrant/deployment.yaml
   - qdrant/service.yaml
   - auth/deployment.yaml
+  - chat/deployment.yaml
+  - project/deployment.yaml
   - gateway/deployment.yaml

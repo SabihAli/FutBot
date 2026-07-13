@@ -40,4 +40,4 @@ FutBot is an advanced AI Football Analyst powered by a multi-LLM Retrieval-Augme
 - **Vector Store**: ChromaDB / BM25 for retrieval.
 
 ## Development
-See `PROJECT_PLAN.md` and `football_rag_prd.md` for detailed development guidelines and architecture.
+See `PROJECT_PLAN.md`, `football_rag_prd.md`, and [`UI_REQUIREMENTS.md`](UI_REQUIREMENTS.md) (living UI spec for Phase 8) for detailed development guidelines and architecture.
