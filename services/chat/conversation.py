@@ -70,6 +70,26 @@ class ConversationContext(BaseModel):
         return [{"role": m.role, "content": m.content} for m in self.get_hot_messages()]
 
     @classmethod
+    def from_graph_fields(
+        cls,
+        session_id: str,
+        messages: List[Dict[str, str]],
+        snapshot: str,
+        snapshot_turn_count: int,
+    ) -> ConversationContext:
+        return cls.from_stored(session_id, messages, snapshot, snapshot_turn_count)
+
+    def to_graph_fields(self) -> Dict[str, Any]:
+        return {
+            "all_messages": [
+                {"role": m.role, "content": m.content} for m in self.messages
+            ],
+            "snapshot": self.snapshot,
+            "snapshot_turn_count": self.snapshot_turn_count,
+            "context_messages": self.hot_messages_as_dicts(),
+        }
+
+    @classmethod
     def from_stored(
         cls,
         chat_id: str,

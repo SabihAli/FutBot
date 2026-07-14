@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, File, Response, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Response, UploadFile
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -7,6 +7,7 @@ from futbot_common.errors import AuthError
 from futbot_common.responses import DataResponse
 from services.project.db import get_db
 from services.project.deps import content_hash, require_user_id
+from services.project.ingestion_trigger import enqueue_ingestion
 from services.project.models import Project, ProjectFile, ProjectMemory
 from services.project.schemas import (
     CreateMemoryRequest,
@@ -16,6 +17,7 @@ from services.project.schemas import (
     ProjectContextResponse,
     ProjectFileResponse,
     ProjectResponse,
+    UpdateFileStatusRequest,
 )
 from services.project.storage import get_storage
 
@@ -109,6 +111,7 @@ async def delete_project(
 )
 async def upload_file(
     project_id: str,
+    background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     db: AsyncSession = Depends(get_db),
     user_id: str = Depends(require_user_id),
@@ -130,12 +133,21 @@ async def upload_file(
     db.add(row)
     await db.commit()
     await db.refresh(row)
+    background_tasks.add_task(
+        enqueue_ingestion,
+        project_id=project.id,
+        file_id=row.id,
+        filename=row.filename,
+        storage_key=row.storage_key,
+        content_hash=row.content_hash,
+    )
     return DataResponse(
         data=ProjectFileResponse(
             id=row.id,
             filename=row.filename,
             content_hash=row.content_hash,
             status=row.status,
+            error_message=row.error_message,
             created_at=row.created_at,
         )
     )
@@ -161,10 +173,47 @@ async def list_files(
                 filename=f.filename,
                 content_hash=f.content_hash,
                 status=f.status,
+                error_message=f.error_message,
                 created_at=f.created_at,
             )
             for f in files
         ]
+    )
+
+
+@router.patch(
+    "/{project_id}/files/{file_id}/status",
+    response_model=DataResponse[ProjectFileResponse],
+)
+async def update_file_status(
+    project_id: str,
+    file_id: str,
+    body: UpdateFileStatusRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(
+        select(ProjectFile).where(
+            ProjectFile.id == file_id,
+            ProjectFile.project_id == project_id,
+        )
+    )
+    row = result.scalar_one_or_none()
+    if not row:
+        raise AuthError("NOT_FOUND", "File not found.", 404)
+
+    row.status = body.status
+    row.error_message = body.error_message
+    await db.commit()
+    await db.refresh(row)
+    return DataResponse(
+        data=ProjectFileResponse(
+            id=row.id,
+            filename=row.filename,
+            content_hash=row.content_hash,
+            status=row.status,
+            error_message=row.error_message,
+            created_at=row.created_at,
+        )
     )
 
 
@@ -260,6 +309,7 @@ async def project_context(
                     filename=f.filename,
                     content_hash=f.content_hash,
                     status=f.status,
+                    error_message=f.error_message,
                     created_at=f.created_at,
                 )
                 for f in project.files

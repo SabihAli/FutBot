@@ -2,7 +2,7 @@ import hashlib
 from datetime import datetime, timezone
 from typing import Any
 
-from src.ingestion.chunking.types import ChunkResult
+from services.ingestion.chunking.types import ChunkResult
 
 
 def _filename_stem(source_file: str) -> str:

@@ -12,6 +12,7 @@ stringData:
   MINIO_BUCKET: futbot-projects
   MINIO_SECURE: "false"
   STORAGE_BACKEND: minio
+  INGESTION_SERVICE_URL: http://ingestion:8086
 
 ---
 apiVersion: apps/v1

@@ -14,10 +14,12 @@ from services.chat.context_builder import (
     load_chat_with_messages,
     run_auto_compress,
     to_context_usage_schema,
+    _messages_to_context,
 )
 from services.chat.db import get_db
 from services.chat.deps import assert_chat_access, optional_user_id, require_user_id
 from services.chat.models import Chat, Message
+from services.chat.orchestrator_client import run_pipeline_sync
 from services.chat.schemas import (
     ChatListItem,
     ChatResponse,
@@ -182,14 +184,63 @@ async def post_message(
     await db.commit()
     await db.refresh(msg)
 
+    assistant_msg: Message | None = None
+    run_id: int | None = None
+    if body.role == "user":
+        ctx = _messages_to_context(chat)
+        snap = chat.snapshot.snapshot_text if chat.snapshot else ""
+        turn_count = chat.snapshot.snapshot_turn_count if chat.snapshot else 0
+        history = [
+            {"role": m.role, "content": m.content}
+            for m in sorted(chat.messages, key=lambda m: m.created_at)
+        ]
+        try:
+            pipeline_result = run_pipeline_sync(
+                session_id=chat.id,
+                query=body.content,
+                context_messages=history,
+                snapshot=snap,
+                snapshot_turn_count=turn_count,
+                project_id=chat.project_id,
+            )
+            assistant_msg = Message(
+                chat_id=chat.id,
+                role="assistant",
+                content=pipeline_result["reply"],
+                citations_json=json.dumps(pipeline_result.get("citations", [])),
+            )
+            db.add(assistant_msg)
+            chat.messages.append(assistant_msg)
+            chat.updated_at = datetime.now(timezone.utc)
+            snap_row = await ensure_snapshot(db, chat.id)
+            snap_row.snapshot_text = pipeline_result["snapshot"]
+            snap_row.snapshot_turn_count = pipeline_result["snapshot_turn_count"]
+            run_id = pipeline_result.get("run_id")
+            await db.commit()
+            await db.refresh(assistant_msg)
+            usage_raw = await build_context_usage(chat, user_id=user_id)
+        except httpx.HTTPError:
+            pass
+
     return DataResponse(
         data=PostMessageResponse(
             message=MessageResponse(
                 id=msg.id, role=msg.role, content=msg.content, created_at=msg.created_at
             ),
+            assistant_message=(
+                MessageResponse(
+                    id=assistant_msg.id,
+                    role=assistant_msg.role,
+                    content=assistant_msg.content,
+                    created_at=assistant_msg.created_at,
+                )
+                if assistant_msg
+                else None
+            ),
             context_usage=to_context_usage_schema(usage_raw),
             should_compress=usage_raw["should_compress"],
             compression_pending=chat.compression_pending,
+            run_id=run_id,
         )
     )
 

@@ -1,3 +1,3 @@
-from futbot_common import create_stub_app
+from services.rag_orchestrator.app import app
 
-app = create_stub_app("rag-orchestrator")
+__all__ = ["app"]

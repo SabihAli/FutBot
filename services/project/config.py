@@ -15,6 +15,9 @@ class Settings:
             "true",
             "yes",
         }
+        self.ingestion_service_url = os.getenv(
+            "INGESTION_SERVICE_URL", "http://localhost:8086"
+        )
 
 
 settings = Settings()

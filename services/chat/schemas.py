@@ -60,6 +60,8 @@ class MessageListResponse(BaseModel):
 
 class PostMessageResponse(BaseModel):
     message: MessageResponse
+    assistant_message: MessageResponse | None = None
     context_usage: ContextUsage
     should_compress: bool
     compression_pending: bool
+    run_id: int | None = None

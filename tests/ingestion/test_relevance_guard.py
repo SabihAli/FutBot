@@ -1,4 +1,4 @@
-from src.ingestion.relevance import _parse_verdict, enforce_football_relevance
+from services.ingestion.relevance import _parse_verdict, enforce_football_relevance
 
 
 def test_parse_verdict_yes():
@@ -14,7 +14,7 @@ def test_parse_verdict_no_or_garbage():
 
 def test_enforce_football_relevance(mocker):
     mocker.patch(
-        "src.ingestion.relevance.invoke_llm",
+        "services.ingestion.relevance.invoke_llm",
         return_value="YES",
     )
     assert enforce_football_relevance("Arsenal beat Chelsea 2-1", "notes.txt") == "YES"
@@ -22,10 +22,10 @@ def test_enforce_football_relevance(mocker):
 
 def test_enforce_football_relevance_rejects(mocker):
     mocker.patch(
-        "src.ingestion.relevance.invoke_llm",
+        "services.ingestion.relevance.invoke_llm",
         return_value="NO",
     )
-    from src.ingestion.errors import FootballRelevanceError
+    from services.ingestion.errors import FootballRelevanceError
     import pytest
 
     with pytest.raises(FootballRelevanceError):

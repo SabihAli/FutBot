@@ -1,7 +1,7 @@
-from src.ingestion.chunking.smart_chunker import SmartChunker
-from src.ingestion.chunking.table_chunker import chunk_table_rows
-from src.ingestion.chunking.text_chunker import chunk_prose
-from src.ingestion.types import ExtractedBlock
+from services.ingestion.chunking.smart_chunker import SmartChunker
+from services.ingestion.chunking.table_chunker import chunk_table_rows
+from services.ingestion.chunking.text_chunker import chunk_prose
+from services.ingestion.types import ExtractedBlock
 
 
 def test_chunk_prose_respects_sentence_boundaries():

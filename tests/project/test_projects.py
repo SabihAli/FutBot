@@ -49,6 +49,53 @@ async def test_upload_file_metadata(project_client):
     listed = await project_client.get(f"/projects/{project_id}/files", headers=headers)
     assert len(listed.json()["data"]) == 1
 
+@pytest.mark.asyncio
+async def test_patch_file_status_internal(project_client):
+    headers = {"X-User-ID": "owner-1"}
+    create = await project_client.post(
+        "/projects", json={"name": "Status"}, headers=headers
+    )
+    project_id = create.json()["data"]["id"]
+
+    files = {"file": ("notes.txt", b"hello world", "text/plain")}
+    upload = await project_client.post(
+        f"/projects/{project_id}/files", files=files, headers=headers
+    )
+    file_id = upload.json()["data"]["id"]
+
+    patch = await project_client.patch(
+        f"/projects/{project_id}/files/{file_id}/status",
+        json={"status": "failed", "error_message": "Not football related"},
+    )
+    assert patch.status_code == 200
+    data = patch.json()["data"]
+    assert data["status"] == "failed"
+    assert data["error_message"] == "Not football related"
+
+
+@pytest.mark.asyncio
+async def test_upload_triggers_ingestion_job(project_client, mocker):
+    mock_post = mocker.patch("services.project.ingestion_trigger.httpx.post")
+    mock_response = mocker.Mock()
+    mock_response.raise_for_status = mocker.Mock()
+    mock_post.return_value = mock_response
+
+    headers = {"X-User-ID": "owner-1"}
+    create = await project_client.post(
+        "/projects", json={"name": "Trigger"}, headers=headers
+    )
+    project_id = create.json()["data"]["id"]
+
+    files = {"file": ("notes.txt", b"hello", "text/plain")}
+    await project_client.post(
+        f"/projects/{project_id}/files", files=files, headers=headers
+    )
+
+    assert mock_post.called
+    payload = mock_post.call_args.kwargs["json"]
+    assert payload["project_id"] == project_id
+    assert payload["filename"] == "notes.txt"
+
 
 @pytest.mark.asyncio
 async def test_memory_and_context(project_client):

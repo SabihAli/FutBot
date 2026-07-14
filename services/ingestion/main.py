@@ -1,3 +1,3 @@
-from futbot_common import create_stub_app
+from services.ingestion.app import app
 
-app = create_stub_app("ingestion")
+__all__ = ["app"]

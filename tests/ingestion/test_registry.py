@@ -1,5 +1,5 @@
-from src.ingestion.extractors.registry import get_extension, get_file_type, get_relevance_sample
-from src.ingestion.types import ExtractedBlock
+from services.ingestion.extractors.registry import get_extension, get_file_type, get_relevance_sample
+from services.ingestion.types import ExtractedBlock
 
 
 def test_get_extension_and_file_type():

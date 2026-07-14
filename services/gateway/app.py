@@ -1,8 +1,11 @@
+import asyncio
 import os
 from typing import Callable
+from urllib.parse import urlparse
 
 import httpx
-from fastapi import FastAPI, Request, Response
+import websockets
+from fastapi import FastAPI, Query, Request, Response, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.background import BackgroundTask
@@ -92,6 +95,34 @@ def create_app() -> FastAPI:
     @app.get("/health", response_model=HealthResponse)
     def health() -> HealthResponse:
         return HealthResponse(status="ok", service="gateway")
+
+    @app.websocket("/ws/pipeline")
+    async def ws_pipeline_proxy(
+        websocket: WebSocket, session_id: str = Query(...)
+    ) -> None:
+        await websocket.accept()
+        parsed = urlparse(settings.orchestrator_service_url)
+        scheme = "wss" if parsed.scheme == "https" else "ws"
+        host = parsed.netloc or parsed.path
+        upstream_url = f"{scheme}://{host}/ws/pipeline?session_id={session_id}"
+        try:
+            async with websockets.connect(upstream_url) as upstream:
+                async def relay_upstream() -> None:
+                    async for message in upstream:
+                        await websocket.send_text(message)
+
+                async def relay_client() -> None:
+                    try:
+                        while True:
+                            await websocket.receive_text()
+                    except WebSocketDisconnect:
+                        pass
+
+                await asyncio.gather(relay_upstream(), relay_client())
+        except WebSocketDisconnect:
+            pass
+        except Exception:
+            await websocket.close()
 
     @app.api_route(
         "/{full_path:path}",

@@ -1,6 +1,6 @@
 import pytest
 from typing import TypedDict, List, Dict, Any
-from src.graph import (
+from services.rag_orchestrator.graph import (
     GraphState,
     compressor_node,
     orchestrator_node,
@@ -20,7 +20,7 @@ from src.graph import (
 
 def test_compressor_node(mocker):
     mocker.patch(
-        "src.graph.SnapshotCompressor.compress_incremental",
+        "services.rag_orchestrator.graph.SnapshotCompressor.compress_incremental",
         return_value='{"schema_version":1}',
     )
     state: GraphState = {
@@ -37,7 +37,7 @@ def test_compressor_node(mocker):
 
 
 def test_rewrite_node(mocker):
-    mocker.patch("src.graph.QueryRewriter.rewrite", return_value="Rewritten Query")
+    mocker.patch("services.rag_orchestrator.graph.QueryRewriter.rewrite", return_value="Rewritten Query")
     state: GraphState = {
         "query": "He did",
         "context_messages": [{"role": "user", "content": "Did Messi score?"}],
@@ -49,37 +49,42 @@ def test_rewrite_node(mocker):
 
 def test_orchestrator_node(mocker):
     # Mock the classify method
-    mocker.patch("src.graph.Orchestrator.classify", return_value="KNOWLEDGE")
+    mocker.patch("services.rag_orchestrator.graph.Orchestrator.classify", return_value="KNOWLEDGE")
     state: GraphState = {"rewritten_query": "Who won?", "context_messages": []}
     
     new_state = orchestrator_node(state)
     assert new_state["classification"] == "KNOWLEDGE"
 
 def test_simple_responder_node(mocker):
-    mocker.patch("src.graph.invoke_llm", return_value="Hello! I am a football bot.")
-    mocker.patch("src.graph.get_prompt", return_value="Prompt: {query}")
+    mocker.patch("services.rag_orchestrator.graph.invoke_llm", return_value="Hello! I am a football bot.")
+    mocker.patch("services.rag_orchestrator.graph.get_prompt", return_value="Prompt: {query}")
     state: GraphState = {"rewritten_query": "Hi"}
     
     new_state = simple_responder_node(state)
     assert new_state["final_answer"] == "Hello! I am a football bot."
 
 def test_retrieve_node(mocker):
-    mocker.patch("src.graph.reciprocal_rank_fusion", return_value=[{"document": "Messi scored."}])
+    mock_response = mocker.Mock()
+    mock_response.raise_for_status = mocker.Mock()
+    mock_response.json.return_value = {
+        "data": {"chunks": [{"document": "Messi scored.", "chunk_id": "c1"}]}
+    }
+    mocker.patch("services.rag_orchestrator.graph.httpx.post", return_value=mock_response)
     state: GraphState = {"rewritten_query": "Did Messi score?"}
-    
+
     new_state = retrieve_node(state)
     assert len(new_state["retrieved_chunks"]) == 1
     assert new_state["retrieved_chunks"][0]["document"] == "Messi scored."
 
 def test_draft_node(mocker):
-    mocker.patch("src.graph.DraftGenerator.generate", return_value="Draft answer")
+    mocker.patch("services.rag_orchestrator.graph.DraftGenerator.generate", return_value="Draft answer")
     state: GraphState = {"rewritten_query": "Q", "retrieved_chunks": []}
     
     new_state = draft_node(state)
     assert new_state["draft_answer"] == "Draft answer"
 
 def test_judge_node_initial_try(mocker):
-    mocker.patch("src.graph.DecisionJudge.evaluate", return_value={"status": "FAIL", "reasoning": "Missing info"})
+    mocker.patch("services.rag_orchestrator.graph.DecisionJudge.evaluate", return_value={"status": "FAIL", "reasoning": "Missing info"})
     state: GraphState = {"rewritten_query": "Q", "draft_answer": "D", "retrieved_chunks": [], "retry_count": 0}
     
     new_state = judge_node(state)

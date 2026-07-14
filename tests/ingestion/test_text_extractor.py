@@ -1,6 +1,6 @@
 import os
 
-from src.ingestion.extractors.text import extract_text
+from services.ingestion.extractors.text import extract_text
 
 TEST_DATA = os.path.join(os.path.dirname(__file__), "test_data")
 

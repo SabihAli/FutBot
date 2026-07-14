@@ -24,4 +24,5 @@ resources:
   - project/deployment.yaml
   - llm-gateway/deployment.yaml
   - retrieval/deployment.yaml
+  - ingestion/deployment.yaml
   - gateway/deployment.yaml

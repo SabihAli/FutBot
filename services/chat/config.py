@@ -15,6 +15,9 @@ class Settings:
             os.getenv("AUTO_COMPRESS_THRESHOLD_PCT", "85")
         )
         self.llm_gateway_url = os.getenv("LLM_GATEWAY_URL", "http://localhost:8087")
+        self.orchestrator_service_url = os.getenv(
+            "ORCHESTRATOR_SERVICE_URL", "http://localhost:8084"
+        )
         self.snapshot_max_tokens = int(os.getenv("SNAPSHOT_MAX_TOKENS", "300"))
 
 

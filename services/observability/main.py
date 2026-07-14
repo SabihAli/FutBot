@@ -1,3 +1,3 @@
-from futbot_common import create_stub_app
+from services.observability.app import app
 
-app = create_stub_app("observability")
+__all__ = ["app"]

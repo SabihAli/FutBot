@@ -2,7 +2,7 @@ import os
 
 import fitz
 
-from src.ingestion.extractors.pdf import count_pdf_vlm_work, extract_pdf
+from services.ingestion.extractors.pdf import count_pdf_vlm_work, extract_pdf
 
 TEST_DATA = os.path.join(os.path.dirname(__file__), "test_data")
 
@@ -40,7 +40,7 @@ def test_extract_pdf_describes_scanned_page(tmp_path, mocker):
     doc.close()
 
     mocker.patch(
-        "src.ingestion.extractors.pdf.process_image",
+        "services.ingestion.extractors.pdf.process_image",
         return_value="[VISUAL DESCRIPTION]\nScoreboard shows Arsenal 2-1 Chelsea.",
     )
 

@@ -20,7 +20,13 @@ class ProjectFileResponse(BaseModel):
     filename: str
     content_hash: str
     status: str
+    error_message: str | None = None
     created_at: datetime
+
+
+class UpdateFileStatusRequest(BaseModel):
+    status: str = Field(min_length=1, max_length=32)
+    error_message: str | None = None
 
 
 class CreateMemoryRequest(BaseModel):

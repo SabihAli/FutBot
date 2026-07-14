@@ -1,6 +1,6 @@
 import pandas as pd
 
-from src.ingestion.extractors.spreadsheet import extract_xlsx, xlsx_relevance_sample
+from services.ingestion.extractors.spreadsheet import extract_xlsx, xlsx_relevance_sample
 
 
 def test_extract_xlsx_all_sheets(tmp_path):

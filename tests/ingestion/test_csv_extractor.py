@@ -1,6 +1,6 @@
 import os
 
-from src.ingestion.extractors.spreadsheet import csv_relevance_sample, extract_csv
+from services.ingestion.extractors.spreadsheet import csv_relevance_sample, extract_csv
 
 TEST_DATA = os.path.join(os.path.dirname(__file__), "test_data")
 

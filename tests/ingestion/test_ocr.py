@@ -1,22 +1,22 @@
-from src.ingestion.extractors import ocr as ocr_module
-from src.ingestion.extractors.ocr import ocr_image
+from services.ingestion.extractors import ocr as ocr_module
+from services.ingestion.extractors.ocr import ocr_image
 
 
 def test_ocr_image_disabled(mocker):
-    mocker.patch.object(ocr_module, "INGEST_OCR_ENABLED", False)
+    mocker.patch.object(ocr_module.ingest_settings, "ingest_ocr_enabled", False)
     assert ocr_image(b"image") is None
 
 
 def test_ocr_image_unavailable(mocker):
-    mocker.patch.object(ocr_module, "INGEST_OCR_ENABLED", True)
+    mocker.patch.object(ocr_module.ingest_settings, "ingest_ocr_enabled", True)
     mocker.patch.object(ocr_module, "_tesseract_available", return_value=False)
     assert ocr_image(b"image") is None
 
 
 def test_ocr_image_filters_low_confidence_and_short_lines(mocker):
-    mocker.patch.object(ocr_module, "INGEST_OCR_ENABLED", True)
+    mocker.patch.object(ocr_module.ingest_settings, "ingest_ocr_enabled", True)
+    mocker.patch.object(ocr_module.ingest_settings, "ingest_ocr_min_confidence", 60)
     mocker.patch.object(ocr_module, "_tesseract_available", return_value=True)
-    mocker.patch.object(ocr_module, "INGEST_OCR_MIN_CONFIDENCE", 60)
     mocker.patch.object(ocr_module.Image, "open", return_value=mocker.Mock())
     mocker.patch.object(
         ocr_module.pytesseract,

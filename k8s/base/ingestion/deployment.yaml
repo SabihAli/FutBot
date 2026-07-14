@@ -1,0 +1,60 @@
+apiVersion: v1
+kind: Secret
+metadata:
+  name: ingestion-secret
+  namespace: futbot
+type: Opaque
+stringData:
+  RETRIEVAL_SERVICE_URL: http://retrieval:8085
+  PROJECT_SERVICE_URL: http://project:8083
+  MINIO_ENDPOINT: minio:9000
+  MINIO_ACCESS_KEY: futbot
+  MINIO_SECRET_KEY: futbotminio
+  MINIO_BUCKET: futbot-projects
+  MINIO_SECURE: "false"
+  LLM_PROVIDER: local
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ingestion
+  namespace: futbot
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ingestion
+  template:
+    metadata:
+      labels:
+        app: ingestion
+    spec:
+      containers:
+        - name: ingestion
+          image: futbot-ingestion:local
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8086
+          envFrom:
+            - secretRef:
+                name: ingestion-secret
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8086
+            initialDelaySeconds: 10
+            periodSeconds: 5
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ingestion
+  namespace: futbot
+spec:
+  selector:
+    app: ingestion
+  ports:
+    - port: 8086
+      targetPort: 8086

@@ -5,6 +5,7 @@ import tempfile
 import pytest
 
 from src import db_logger
+from services.observability import trace_store
 from src.db_logger import (
     compute_content_hash,
     create_ingestion_event,
@@ -13,17 +14,15 @@ from src.db_logger import (
     log_ingestion_chunks,
     update_ingestion_event,
 )
-from src.ingestion.errors import DuplicateUploadError
-from src.ingestion.indexer import index_blocks
-from src.ingestion.types import ExtractedBlock
+from services.ingestion.errors import DuplicateUploadError
 
 
 @pytest.fixture
 def temp_db(monkeypatch):
     with tempfile.TemporaryDirectory() as tmpdir:
         db_path = os.path.join(tmpdir, "trace_logs.db")
-        monkeypatch.setattr(db_logger, "DB_PATH", db_path)
-        db_logger.init_db()
+        monkeypatch.setattr(trace_store, "DB_PATH", db_path)
+        trace_store.init_db()
         yield db_path
 
 
@@ -79,25 +78,6 @@ def test_log_ingestion_chunks_persists_rows(temp_db):
     assert rows[0]["chunk_text"] == "row chunk"
     assert rows[0]["chunk_type"] == "table"
     assert rows[0]["token_count"] == 12
-
-
-def test_index_blocks_raises_not_implemented(temp_db):
-    ingestion_id = create_ingestion_event(
-        filename="notes.txt",
-        file_type="text",
-        status="processing",
-        content_hash=compute_content_hash(b"notes"),
-    )
-    blocks = [
-        ExtractedBlock(
-            text="Arsenal beat Chelsea 2-1 in the Premier League.",
-            chunk_type="text",
-            source_file="notes.txt",
-        )
-    ]
-
-    with pytest.raises(NotImplementedError):
-        index_blocks(blocks, None, None, ingestion_id=ingestion_id)
 
 
 def test_duplicate_upload_error_message():
