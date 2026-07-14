@@ -1,5 +1,8 @@
 import logging
+import os
 from typing import TypedDict, List, Dict, Any, Optional
+
+import httpx
 from langgraph.graph import StateGraph, END
 
 from services.llm_gateway.components import (
@@ -11,7 +14,6 @@ from services.llm_gateway.components import (
 )
 from services.llm_gateway.provider import MODEL_GENERATOR, invoke_llm
 from src.context import ConversationContext
-from src.retriever import reciprocal_rank_fusion
 from src.db_logger import PipelineRunLogger, log_pipeline_trace
 from src.pipeline_events import emit_event
 
@@ -205,16 +207,14 @@ def retrieve_node(state: GraphState) -> GraphState:
     chunks = []
 
     try:
-        from src.api import global_chroma, global_bm25
-
-        dense_results = global_chroma.query(query, top_k=15)
-
-        try:
-            sparse_results = global_bm25.search(query, top_k=15)
-        except RuntimeError:
-            sparse_results = []
-
-        chunks = reciprocal_rank_fusion(dense_results, sparse_results)
+        base = os.getenv("RETRIEVAL_SERVICE_URL", "http://localhost:8085")
+        response = httpx.post(
+            f"{base.rstrip('/')}/retrieve",
+            json={"query": query, "top_k": 15, "project_id": None},
+            timeout=30.0,
+        )
+        response.raise_for_status()
+        chunks = response.json()["data"]["chunks"]
     except Exception as e:
         logger.error(f"Retrieval error: {e}")
         chunks = []

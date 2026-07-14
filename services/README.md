@@ -1,6 +1,6 @@
 # FutBot microservices
 
-## Phase 3 (active)
+## Phase 4 (active)
 
 | Service | Port | Run |
 |---------|------|-----|
@@ -9,6 +9,7 @@
 | chat | 8082 | `uvicorn services.chat.main:app --port 8082` |
 | project | 8083 | `uvicorn services.project.main:app --port 8083` |
 | llm-gateway | 8087 | `uvicorn services.llm_gateway.main:app --port 8087` |
+| retrieval | 8085 | `uvicorn services.retrieval.main:app --port 8085` |
 
 ```bash
 pip install -e packages/futbot-common
@@ -18,8 +19,8 @@ docker compose -f docker-compose.services.yml up -d --build
 alembic upgrade head
 ```
 
-Gateway routes: `/auth/*`, `/chats/*`, `/projects/*` (proxy). `/llm/*` is **internal only** (`501` on public gateway).
+Gateway routes: `/auth/*`, `/chats/*`, `/projects/*` (proxy). `/llm/*` and `/retrieve/*` are **internal only** (`501` on public gateway).
 
 Chat auto-compress: inline on `POST /chats/{id}/messages` when context ≥ 85% — calls `LLM_GATEWAY_URL/llm/compress` (no JWT, works for anon).
 
-Monolith `POST /api/chat` imports `services.llm_gateway` in-process for local RAG dev.
+Retrieval: `POST /retrieve`, `POST /index/chunks`, `DELETE /index/{project_id}` on `:8085` (Qdrant dense + BM25 + RRF).

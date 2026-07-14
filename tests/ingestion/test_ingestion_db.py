@@ -16,7 +16,6 @@ from src.db_logger import (
 from src.ingestion.errors import DuplicateUploadError
 from src.ingestion.indexer import index_blocks
 from src.ingestion.types import ExtractedBlock
-from src.retriever import BM25Retriever, ChromaRetriever
 
 
 @pytest.fixture
@@ -82,18 +81,13 @@ def test_log_ingestion_chunks_persists_rows(temp_db):
     assert rows[0]["token_count"] == 12
 
 
-def test_index_blocks_logs_chunks_when_ingestion_id_provided(temp_db, mocker):
+def test_index_blocks_raises_not_implemented(temp_db):
     ingestion_id = create_ingestion_event(
         filename="notes.txt",
         file_type="text",
         status="processing",
         content_hash=compute_content_hash(b"notes"),
     )
-    chroma = mocker.Mock()
-    bm25 = mocker.Mock()
-    bm25.corpus = []
-    bm25.chunk_ids = []
-
     blocks = [
         ExtractedBlock(
             text="Arsenal beat Chelsea 2-1 in the Premier League.",
@@ -102,11 +96,8 @@ def test_index_blocks_logs_chunks_when_ingestion_id_provided(temp_db, mocker):
         )
     ]
 
-    count = index_blocks(blocks, chroma, bm25, ingestion_id=ingestion_id)
-    assert count >= 1
-    rows = get_ingestion_chunks(ingestion_id)
-    assert len(rows) == count
-    chroma.add_documents.assert_called_once()
+    with pytest.raises(NotImplementedError):
+        index_blocks(blocks, None, None, ingestion_id=ingestion_id)
 
 
 def test_duplicate_upload_error_message():

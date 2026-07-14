@@ -337,3 +337,4 @@ Budget = **full next-turn LLM prompt**: snapshot + hot messages + current query 
 |------|-------|---------|
 | 2026-07-13 | 2 | Phase 2 implemented: full prompt budget breakdown in context_usage API |
 | 2026-07-13 | 3 | Phase 3 implemented: LLM gateway (internal), inline auto-compress on message POST, `/llm/*` stays 501 on public gateway |
+| 2026-07-14 | 4 | Phase 4 implemented: retrieval service (Qdrant + BM25 + RRF), citation metadata on chunks, `/retrieve/*` internal-only |

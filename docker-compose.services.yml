@@ -76,6 +76,23 @@ services:
     ports:
       - "8087:8087"
 
+  retrieval:
+    build:
+      context: .
+      dockerfile: services/retrieval/Dockerfile
+    env_file:
+      - .env
+    environment:
+      QDRANT_URL: http://qdrant:6333
+      QDRANT_COLLECTION: futbot_chunks
+      DATA_DIR: /data
+    depends_on:
+      - qdrant
+    ports:
+      - "8085:8085"
+    volumes:
+      - retrieval_data:/data
+
   project:
     build:
       context: .
@@ -125,5 +142,14 @@ services:
       timeout: 3s
       retries: 5
 
+  qdrant:
+    image: qdrant/qdrant:v1.12.5
+    ports:
+      - "6333:6333"
+    volumes:
+      - qdrant_data:/qdrant/storage
+
 volumes:
   minio_data:
+  retrieval_data:
+  qdrant_data:

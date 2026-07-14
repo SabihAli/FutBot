@@ -1,0 +1,61 @@
+apiVersion: v1
+kind: Secret
+metadata:
+  name: retrieval-secret
+  namespace: futbot
+type: Opaque
+stringData:
+  QDRANT_URL: http://qdrant:6333
+  QDRANT_COLLECTION: futbot_chunks
+  DATA_DIR: /data
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: retrieval
+  namespace: futbot
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: retrieval
+  template:
+    metadata:
+      labels:
+        app: retrieval
+    spec:
+      containers:
+        - name: retrieval
+          image: futbot-retrieval:local
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8085
+          envFrom:
+            - secretRef:
+                name: retrieval-secret
+          volumeMounts:
+            - name: retrieval-data
+              mountPath: /data
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8085
+            initialDelaySeconds: 10
+            periodSeconds: 5
+      volumes:
+        - name: retrieval-data
+          emptyDir: {}
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: retrieval
+  namespace: futbot
+spec:
+  selector:
+    app: retrieval
+  ports:
+    - port: 8085
+      targetPort: 8085

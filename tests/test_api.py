@@ -1,9 +1,6 @@
 import pytest
-from datetime import datetime, timezone
 from fastapi.testclient import TestClient
 from src.api import app, sessions_db
-from src.context import ConversationContext
-from src.data_layer import Article
 
 client = TestClient(app)
 
@@ -16,50 +13,14 @@ def clear_sessions_db():
 # ---------------------------------------------------------------------------
 # POST /api/ingest
 # ---------------------------------------------------------------------------
-def test_ingest_endpoint(mocker):
-    # Mock load_csv to return a real Article dataclass
-    fake_article = Article(
-        title="Messi Wins Ballon d'Or Again",
-        body="Lionel Messi claimed his record ninth Ballon d'Or award.",
-        url="https://www.bbc.com/sport/football/articles/12345",
-        source="bbc",
-        date_published=datetime(2025, 10, 20, tzinfo=timezone.utc),
-    )
-    mocker.patch("src.api.load_csv", return_value=[fake_article])
-
-    # Mock the retrievers so we don't need real ChromaDB/BM25 in tests
-    mocker.patch("src.api.global_chroma.add_documents")
-    mocker.patch("src.api.global_bm25.build_index")
-    mocker.patch("src.api.global_bm25.save")
-
-    # Mock smart chunking so bootstrap test stays fast and deterministic
-    from src.ingestion.chunking.types import ChunkResult
-
-    fake_chunks = [
-        ChunkResult(text="chunk one", chunk_type="text", source_file="title", chunk_index=0, token_count=2),
-        ChunkResult(text="chunk two", chunk_type="text", source_file="title", chunk_index=1, token_count=2),
-    ]
-    mocker.patch("src.api.SmartChunker").return_value.chunk_article.return_value = fake_chunks
-    mocker.patch(
-        "src.api.chunked_to_index_payload",
-        return_value=(["chunk one", "chunk two"], ["bm25 one", "bm25 two"], [{}, {}], ["chunk_0", "chunk_1"]),
-    )
-
+def test_ingest_endpoint_returns_501():
     response = client.post("/api/ingest")
-    assert response.status_code == 200
-    data = response.json()
-    assert data["status"] == "success"
-    assert data["articles_ingested"] == 1
-    assert data["total_chunks_indexed"] == 2
+    assert response.status_code == 501
 
 
-def test_ingest_no_articles(mocker):
-    mocker.patch("src.api.load_csv", return_value=[])
-
+def test_ingest_no_articles_returns_501():
     response = client.post("/api/ingest")
-    assert response.status_code == 200
-    data = response.json()
-    assert data["articles_ingested"] == 0
+    assert response.status_code == 501
 
 
 # ---------------------------------------------------------------------------
@@ -67,7 +28,7 @@ def test_ingest_no_articles(mocker):
 # ---------------------------------------------------------------------------
 def test_post_chat(mocker):
     mock_pipeline = mocker.patch(
-        "src.api.run_pipeline",
+        "src.api._run_pipeline",
         return_value=("Here is your answer.", "{}", 0),
     )
 

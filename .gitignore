@@ -11,3 +11,4 @@ db_dump.json
 trace_logs.db
 data/
 skills/*
+futbot-venv/
