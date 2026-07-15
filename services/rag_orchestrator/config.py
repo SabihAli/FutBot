@@ -7,6 +7,7 @@ class Settings:
             "RETRIEVAL_SERVICE_URL", "http://localhost:8085"
         )
         self.hot_context_window = int(os.getenv("HOT_CONTEXT_WINDOW", "10"))
+        self.tools_service_url = os.getenv("TOOLS_SERVICE_URL", "http://localhost:8088")
 
 
 settings = Settings()

@@ -9,6 +9,7 @@ Schema (normalized):
   loop_iterations     – one row per rewriter→judge retry cycle
   retrieval_events    – one row per retrieve_node call
   retrieved_chunks    – one row per chunk returned in a retrieval event
+  tool_calls          – one row per tool invocation on the TOOL path
 """
 
 import hashlib
@@ -92,7 +93,22 @@ def init_db():
         )
     """)
 
-    # 5. Normalized individual chunks returned by retrieval
+    # 5. Tool invocations during TOOL-path pipeline runs
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS tool_calls (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            run_id          INTEGER NOT NULL REFERENCES pipeline_runs(id),
+            iteration       INTEGER DEFAULT 0,
+            tool_name       TEXT NOT NULL,
+            success         INTEGER DEFAULT 0,
+            skipped         INTEGER DEFAULT 0,
+            error_message   TEXT,
+            latency_ms      INTEGER,
+            called_at       TEXT NOT NULL
+        )
+    """)
+
+    # 6. Normalized individual chunks returned by retrieval
     c.execute("""
         CREATE TABLE IF NOT EXISTS retrieved_chunks (
             id              INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -308,6 +324,35 @@ class PipelineRunLogger:
         finally:
             conn.close()
 
+    # ---- Tool call logging ------------------------------------------------
+
+    def log_tool_call(
+        self,
+        tool_name: str,
+        *,
+        success: bool = False,
+        skipped: bool = False,
+        error_message: str = "",
+        latency_ms: Optional[int] = None,
+        iteration: int = 0,
+    ):
+        conn = self._connect()
+        try:
+            conn.execute(
+                """INSERT INTO tool_calls
+                   (run_id, iteration, tool_name, success, skipped, error_message,
+                    latency_ms, called_at)
+                   VALUES (?,?,?,?,?,?,?,?)""",
+                (
+                    self.run_id, iteration, tool_name,
+                    int(success), int(skipped), error_message or None,
+                    latency_ms, _now(),
+                ),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
     # ---- Loop iteration logging -------------------------------------------
 
     def log_iteration(
@@ -404,6 +449,11 @@ def get_run_trace(run_id: int) -> dict[str, Any] | None:
                FROM loop_iterations WHERE run_id = ? ORDER BY iteration""",
             (run_id,),
         ).fetchall()
+        tool_calls = conn.execute(
+            """SELECT tool_name, success, skipped, error_message, latency_ms, iteration, called_at
+               FROM tool_calls WHERE run_id = ? ORDER BY id""",
+            (run_id,),
+        ).fetchall()
         return {
             "id": row[0],
             "session_id": row[1],
@@ -435,6 +485,18 @@ def get_run_trace(run_id: int) -> dict[str, Any] | None:
                     "judge_reasoning": r[3],
                 }
                 for r in iterations
+            ],
+            "tool_calls": [
+                {
+                    "tool_name": r[0],
+                    "success": bool(r[1]),
+                    "skipped": bool(r[2]),
+                    "error_message": r[3],
+                    "latency_ms": r[4],
+                    "iteration": r[5],
+                    "called_at": r[6],
+                }
+                for r in tool_calls
             ],
         }
     finally:

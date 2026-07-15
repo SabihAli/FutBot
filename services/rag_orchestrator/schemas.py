@@ -1,6 +1,11 @@
 from pydantic import BaseModel, Field
 
 
+class ToolResultItem(BaseModel):
+    tool: str
+    result: dict | None = None
+
+
 class PipelineRunRequest(BaseModel):
     session_id: str
     query: str
@@ -8,6 +13,7 @@ class PipelineRunRequest(BaseModel):
     snapshot: str = ""
     snapshot_turn_count: int = 0
     project_id: str | None = None
+    web_search_enabled: bool = False
 
 
 class CitationItem(BaseModel):
@@ -24,3 +30,8 @@ class PipelineRunResponse(BaseModel):
     run_id: int | None = None
     classification: str = "UNKNOWN"
     reached_max_retries: bool = False
+    tool_results: list[ToolResultItem] = Field(default_factory=list)
+    tool_errors: list[str] = Field(default_factory=list)
+    tool_notice: str | None = None
+    tool_notice_code: str | None = None
+    web_search_skipped: bool = False

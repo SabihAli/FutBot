@@ -34,6 +34,7 @@ def pipeline_run(body: PipelineRunRequest) -> DataResponse[PipelineRunResponse]:
             snapshot=body.snapshot,
             snapshot_turn_count=body.snapshot_turn_count,
             project_id=body.project_id,
+            web_search_enabled=body.web_search_enabled,
         )
     except Exception as exc:
         emit_event(body.session_id, {"type": "pipeline_error", "message": str(exc)})

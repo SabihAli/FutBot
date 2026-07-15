@@ -7,6 +7,7 @@ class Settings:
         self.groq_api_key = os.getenv("GROQ_API_KEY", "")
         self.groq_max_retries = int(os.getenv("GROQ_MAX_RETRIES", "5"))
         self.groq_backoff_base = float(os.getenv("GROQ_BACKOFF_BASE", "1.5"))
+        self.groq_backoff_max_sec = float(os.getenv("GROQ_BACKOFF_MAX_SEC", "60"))
         self.snapshot_max_tokens = int(os.getenv("SNAPSHOT_MAX_TOKENS", "300"))
         self.llm_rate_limit_rpm = int(os.getenv("LLM_RATE_LIMIT_RPM", "60"))
         self.model_orchestrator = os.getenv("MODEL_ORCHESTRATOR", "Qwen/Qwen3.5-0.8B")
@@ -24,6 +25,8 @@ class Settings:
             "URL_4B",
             "https://19d9-154-192-5-123.ngrok-free.app/v1/chat/completions",
         )
+        self.groq_model_120b = os.getenv("GROQ_MODEL_120B", "openai/gpt-oss-120b")
+        self.groq_model_32b = os.getenv("GROQ_MODEL_32B", "qwen/qwen3-32b")
         self.groq_model_main = os.getenv("GROQ_MODEL_MAIN", "qwen/qwen3.6-27b")
         self.groq_model_orchestrator = os.getenv(
             "GROQ_MODEL_ORCHESTRATOR", "openai/gpt-oss-20b"

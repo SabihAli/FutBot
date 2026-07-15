@@ -238,7 +238,7 @@ Align with `docs/ENHANCEMENTS.md`:
 
 | ID | Requirement | API / notes |
 |----|-------------|-------------|
-| P7-01 | Tool toggle or settings (e.g. web search on/off) | `POST /pipeline/run` `tools_enabled: [...]` |
+| P7-01 | Web search toggle on send | `POST /chats/{id}/messages` `web_search_enabled: bool` |
 | P7-02 | Show tool invocation in pipeline panel | New stage cards e.g. `tool:web_search` |
 | P7-03 | Surface tool errors inline in assistant message or panel | Non-fatal tool failure copy |
 
@@ -302,6 +302,7 @@ Master backlog for the full UI build. Order is suggested, not mandatory.
 | Create project | POST | `/projects` | JWT | 2 |
 | Upload file | POST | `/projects/{id}/files` | JWT | 2 |
 | Project context | GET | `/projects/{id}/context` | JWT | 2 |
+| List tools | GET | `/tools` | JWT | 7 |
 | Run pipeline | POST | `/pipeline/run` | JWT | 6 |
 | Pipeline WS | WS | `/ws/*` | Optional | 6 |
 | Traces | GET | `/traces/{id}` | JWT | 6 |
@@ -340,3 +341,4 @@ Budget = **full next-turn LLM prompt**: snapshot + hot messages + current query 
 | 2026-07-14 | 4 | Phase 4 implemented: retrieval service (Qdrant + BM25 + RRF), citation metadata on chunks, `/retrieve/*` internal-only |
 | 2026-07-14 | 5 | Phase 5 implemented: ingestion service (async jobs), project upload auto-trigger, `error_message` on files, `/ingest/*` internal-only |
 | 2026-07-14 | 6 | Phase 6 implemented: RAG orchestrator (LangGraph), chat inline RAG on message POST, WS `/ws/pipeline`, observability `GET /traces/{id}`, monolith `/api/chat` → 501 |
+| 2026-07-15 | 7 | Phase 7 implemented: tools service (`:8088`), web search opt-in, football MCP, PDF export, TOOL pipeline path, `tool_notice` / `tool_calls` tracing, `GET /tools` on gateway |

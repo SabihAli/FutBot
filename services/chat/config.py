@@ -18,6 +18,7 @@ class Settings:
         self.orchestrator_service_url = os.getenv(
             "ORCHESTRATOR_SERVICE_URL", "http://localhost:8084"
         )
+        self.tools_service_url = os.getenv("TOOLS_SERVICE_URL", "http://localhost:8088")
         self.snapshot_max_tokens = int(os.getenv("SNAPSHOT_MAX_TOKENS", "300"))
 
 

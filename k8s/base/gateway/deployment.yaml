@@ -7,6 +7,7 @@ data:
   AUTH_SERVICE_URL: "http://auth:8081"
   CHAT_SERVICE_URL: "http://chat:8082"
   PROJECT_SERVICE_URL: "http://project:8083"
+  TOOLS_SERVICE_URL: "http://tools:8088"
   ANON_MESSAGE_LIMIT: "10"
 
 ---

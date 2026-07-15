@@ -1,5 +1,7 @@
+import json
 import logging
-import os
+import time
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, List, Optional, TypedDict
 
 import httpx
@@ -11,10 +13,13 @@ from services.llm_gateway.components import (
     Orchestrator,
     QueryRewriter,
     SnapshotCompressor,
+    ToolPlanner,
 )
 from services.llm_gateway.provider import MODEL_GENERATOR, invoke_llm
 from services.chat.conversation import ConversationContext
 from services.observability.trace_store import PipelineRunLogger
+from services.rag_orchestrator.config import settings
+from services.rag_orchestrator import tool_client
 from services.rag_orchestrator.pipeline_events import emit_event
 
 from services.llm_gateway.prompt_loader import get_prompt, get_prompt_parts
@@ -49,6 +54,14 @@ class GraphState(TypedDict, total=False):
 
     # Internal iteration DB ID (for linking retrieval back to the iteration row)
     current_iteration_id: Optional[int]
+
+    web_search_enabled: bool
+    tool_plan: List[Dict[str, Any]]
+    tool_results: List[Dict[str, Any]]
+    tool_errors: List[str]
+    tool_notice: Optional[str]
+    tool_notice_code: Optional[str]
+    web_search_skipped: bool
 
     final_answer: str
 
@@ -170,11 +183,17 @@ def orchestrator_node(state: GraphState) -> GraphState:
         run_logger=run_logger,
         iteration=iteration,
     )
+    updates: Dict[str, Any] = {"classification": classification}
+    if classification == "TOOL" and not tool_client.mcp_tools_available():
+        classification = "KNOWLEDGE"
+        updates["classification"] = classification
+        updates["tool_notice"] = tool_client.MCP_UNAVAILABLE_NOTICE
+        updates["tool_notice_code"] = "MCP_UNAVAILABLE"
     _emit_stage(state, "orchestrating", "complete", {
         "classification": classification,
         "rewritten_query": state.get("rewritten_query", ""),
     })
-    return {"classification": classification}
+    return updates
 
 def simple_responder_node(state: GraphState) -> GraphState:
     _emit_stage(state, "responding", "active")
@@ -195,26 +214,19 @@ def simple_responder_node(state: GraphState) -> GraphState:
     _emit_stage(state, "responding", "complete", {"response": answer})
     return {"final_answer": answer}
 
-def retrieve_node(state: GraphState) -> GraphState:
-    _emit_stage(state, "retrieving", "active", {
-        "query": state.get("rewritten_query", ""),
-    })
+def _fetch_retrieval_chunks(state: GraphState) -> tuple[list[Dict[str, Any]], list[Dict[str, Any]]]:
     run_logger = state.get("run_logger")
     query = state.get("rewritten_query", "")
     iteration = state.get("retry_count", 0) + 1
     iteration_id = state.get("current_iteration_id")
-
-    dense_results = []
-    sparse_results = []
-    chunks = []
+    chunks: list[Dict[str, Any]] = []
 
     try:
-        base = settings.retrieval_service_url
         payload: dict[str, Any] = {"query": query, "top_k": 15}
         if state.get("project_id"):
             payload["project_id"] = state["project_id"]
         response = httpx.post(
-            f"{base.rstrip('/')}/retrieve",
+            f"{settings.retrieval_service_url.rstrip('/')}/retrieve",
             json=payload,
             timeout=30.0,
         )
@@ -222,35 +234,157 @@ def retrieve_node(state: GraphState) -> GraphState:
         chunks = response.json()["data"]["chunks"]
     except Exception as e:
         logger.error(f"Retrieval error: {e}")
-        chunks = []
 
-    # Log retrieval event
     if run_logger is not None:
         try:
             run_logger.log_retrieval(
                 query_used=query,
                 fused_chunks=chunks,
-                dense_count=len(dense_results),
-                sparse_count=len(sparse_results),
+                dense_count=0,
+                sparse_count=0,
                 iteration=iteration,
                 iteration_id=iteration_id,
             )
         except Exception as e:
             logger.warning(f"Failed to log retrieval: {e}")
 
-    chunk_ids = [c.get("chunk_id", "unknown") for c in chunks]
-    traces = state.get("loop_traces", [])
+    traces = list(state.get("loop_traces", []))
     if traces:
-        traces[-1]["retrieved_chunk_ids"] = chunk_ids
+        traces[-1]["retrieved_chunk_ids"] = [c.get("chunk_id", "unknown") for c in chunks]
+    return chunks, traces
 
+
+def _planner_catalog() -> str:
+    catalog = tool_client.fetch_tool_catalog()
+    filtered = [t for t in catalog if t.get("name") != "markdown_to_pdf"]
+    return json.dumps(filtered, indent=2)
+
+
+def _run_tools_branch(state: GraphState) -> Dict[str, Any]:
+    _emit_stage(state, "tool_planning", "active")
+    run_logger = state.get("run_logger")
+    iteration = state.get("retry_count", 0) + 1
+    query = state.get("rewritten_query", state.get("query", ""))
+    web_search_enabled = bool(state.get("web_search_enabled"))
+
+    planner = ToolPlanner()
+    plan = planner.plan(query, _planner_catalog(), run_logger=run_logger, iteration=iteration)
+    _emit_stage(state, "tool_planning", "complete", {"planned_tools": [p.get("tool") for p in plan]})
+
+    results: list[dict[str, Any]] = []
+    errors: list[str] = []
+    web_search_skipped = False
+    session_id = state.get("session_id", "")
+    run_id = run_logger.run_id if run_logger is not None else None
+
+    for item in plan:
+        tool_name = str(item.get("tool", ""))
+        arguments = item.get("arguments") if isinstance(item.get("arguments"), dict) else {}
+        stage = f"tool:{tool_name}"
+        _emit_stage(state, stage, "active", {"tool": tool_name})
+
+        if tool_name == tool_client.WEB_SEARCH_TOOL and not web_search_enabled:
+            web_search_skipped = True
+            if run_logger is not None:
+                run_logger.log_tool_call(
+                    tool_name, skipped=True, iteration=iteration,
+                )
+            _emit_stage(state, stage, "complete", {"skipped": True})
+            continue
+
+        started = time.monotonic()
+        try:
+            payload = tool_client.execute_tool(
+                tool=tool_name,
+                arguments=arguments,
+                web_search_enabled=web_search_enabled,
+                session_id=session_id,
+                run_id=run_id,
+            )
+            latency_ms = int((time.monotonic() - started) * 1000)
+            if payload.get("skipped"):
+                if tool_name == tool_client.WEB_SEARCH_TOOL:
+                    web_search_skipped = True
+                if run_logger is not None:
+                    run_logger.log_tool_call(
+                        tool_name, skipped=True, iteration=iteration, latency_ms=latency_ms,
+                    )
+                _emit_stage(state, stage, "complete", {"skipped": True})
+                continue
+            if payload.get("success"):
+                results.append({"tool": tool_name, "result": payload.get("result")})
+                if run_logger is not None:
+                    run_logger.log_tool_call(
+                        tool_name, success=True, iteration=iteration, latency_ms=latency_ms,
+                    )
+                _emit_stage(state, stage, "complete", {"success": True})
+            else:
+                msg = payload.get("error_message") or "tool failed"
+                errors.append(f"{tool_name}: {msg}")
+                if run_logger is not None:
+                    run_logger.log_tool_call(
+                        tool_name,
+                        success=False,
+                        error_message=msg,
+                        iteration=iteration,
+                        latency_ms=latency_ms,
+                    )
+                _emit_stage(state, stage, "complete", {"success": False, "error": msg})
+        except Exception as exc:
+            latency_ms = int((time.monotonic() - started) * 1000)
+            errors.append(f"{tool_name}: {exc}")
+            if run_logger is not None:
+                run_logger.log_tool_call(
+                    tool_name,
+                    success=False,
+                    error_message=str(exc),
+                    iteration=iteration,
+                    latency_ms=latency_ms,
+                )
+            _emit_stage(state, stage, "complete", {"success": False, "error": str(exc)})
+
+    updates: Dict[str, Any] = {
+        "tool_plan": plan,
+        "tool_results": results,
+        "tool_errors": errors,
+        "web_search_skipped": web_search_skipped,
+    }
+    if web_search_skipped:
+        updates["tool_notice"] = tool_client.WEB_SEARCH_SKIPPED_NOTICE
+        updates["tool_notice_code"] = "WEB_SEARCH_SKIPPED"
+    return updates
+
+
+def external_context_node(state: GraphState) -> GraphState:
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        tools_future = pool.submit(_run_tools_branch, state)
+        retrieve_future = pool.submit(_fetch_retrieval_chunks, state)
+        tool_updates = tools_future.result()
+        chunks, traces = retrieve_future.result()
+
+    _emit_stage(state, "retrieving", "active", {"query": state.get("rewritten_query", "")})
     _emit_stage(state, "retrieving", "complete", {
-        "query": query,
-        "dense_count": len(dense_results),
-        "sparse_count": len(sparse_results),
+        "query": state.get("rewritten_query", ""),
         "chunk_count": len(chunks),
         "chunks": _chunk_previews(chunks),
     })
+    return {
+        **tool_updates,
+        "retrieved_chunks": chunks,
+        "loop_traces": traces,
+    }
 
+
+def retrieve_node(state: GraphState) -> GraphState:
+    _emit_stage(state, "retrieving", "active", {
+        "query": state.get("rewritten_query", ""),
+    })
+    chunks, traces = _fetch_retrieval_chunks(state)
+    _emit_stage(state, "retrieving", "complete", {
+        "query": state.get("rewritten_query", ""),
+        "chunk_count": len(chunks),
+        "chunks": _chunk_previews(chunks),
+    })
     return {"retrieved_chunks": chunks, "loop_traces": traces}
 
 def draft_node(state: GraphState) -> GraphState:
@@ -262,6 +396,7 @@ def draft_node(state: GraphState) -> GraphState:
     draft = generator.generate(
         state.get("rewritten_query", ""),
         state.get("retrieved_chunks", []),
+        tool_results=state.get("tool_results", []),
         run_logger=run_logger,
         iteration=iteration,
     )
@@ -279,6 +414,7 @@ def judge_node(state: GraphState) -> GraphState:
         state.get("rewritten_query", ""),
         state.get("draft_answer", ""),
         state.get("retrieved_chunks", []),
+        tool_results=state.get("tool_results", []),
         run_logger=run_logger,
         iteration=iteration,
     )
@@ -331,6 +467,8 @@ def judge_node(state: GraphState) -> GraphState:
 def route_after_orchestrator(state: GraphState) -> str:
     if state.get("classification") == "SIMPLE":
         return "simple"
+    if state.get("classification") == "TOOL":
+        return "external"
     return "knowledge"
 
 def route_after_judge(state: GraphState) -> str:
@@ -356,6 +494,7 @@ def build_graph():
     workflow.add_node("rewriter", rewrite_node)
     workflow.add_node("orchestrator", orchestrator_node)
     workflow.add_node("simple_responder", simple_responder_node)
+    workflow.add_node("external_context", external_context_node)
     workflow.add_node("retriever", retrieve_node)
     workflow.add_node("drafter", draft_node)
     workflow.add_node("judge", judge_node)
@@ -372,11 +511,13 @@ def build_graph():
         route_after_orchestrator,
         {
             "simple": "simple_responder",
-            "knowledge": "retriever"
+            "knowledge": "retriever",
+            "external": "external_context",
         }
     )
 
     workflow.add_edge("simple_responder", END)
+    workflow.add_edge("external_context", "drafter")
 
     workflow.add_edge("retriever", "drafter")
     workflow.add_edge("drafter", "judge")
@@ -420,6 +561,7 @@ def run_pipeline(
     snapshot: str = "",
     snapshot_turn_count: int = 0,
     project_id: str | None = None,
+    web_search_enabled: bool = False,
 ) -> dict[str, Any]:
     """Run the full RAG pipeline."""
     if context_messages is None:
@@ -440,6 +582,13 @@ def run_pipeline(
             "retry_count": 0,
             "loop_traces": [],
             "current_iteration_id": None,
+            "web_search_enabled": web_search_enabled,
+            "tool_plan": [],
+            "tool_results": [],
+            "tool_errors": [],
+            "tool_notice": None,
+            "tool_notice_code": None,
+            "web_search_skipped": False,
         }
 
         result = app.invoke(initial_state)
@@ -466,7 +615,7 @@ def run_pipeline(
             logger.error(f"Failed to finalize run log: {e}")
 
         if session_id:
-            emit_event(session_id, {
+            complete_event: Dict[str, Any] = {
                 "type": "pipeline_complete",
                 "reply": answer,
                 "classification": result.get("classification", "UNKNOWN"),
@@ -474,7 +623,20 @@ def run_pipeline(
                 "loop_traces": result.get("loop_traces", []),
                 "reached_max_retries": bool(result.get("reached_max_retries")),
                 "snapshot": result_snapshot,
-            })
+            }
+            if result.get("tool_notice"):
+                complete_event["tool_notice"] = result.get("tool_notice")
+                complete_event["tool_notice_code"] = result.get("tool_notice_code")
+            emit_event(session_id, complete_event)
+            if result.get("tool_notice"):
+                emit_event(
+                    session_id,
+                    {
+                        "type": "tool_notice",
+                        "code": result.get("tool_notice_code"),
+                        "message": result.get("tool_notice"),
+                    },
+                )
 
         return {
             "reply": answer,
@@ -484,4 +646,9 @@ def run_pipeline(
             "run_id": run_logger.run_id,
             "classification": result.get("classification", "UNKNOWN"),
             "reached_max_retries": bool(result.get("reached_max_retries")),
+            "tool_results": result.get("tool_results", []),
+            "tool_errors": result.get("tool_errors", []),
+            "tool_notice": result.get("tool_notice"),
+            "tool_notice_code": result.get("tool_notice_code"),
+            "web_search_skipped": bool(result.get("web_search_skipped")),
         }

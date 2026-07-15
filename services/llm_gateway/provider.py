@@ -18,11 +18,12 @@ GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
 GROQ_MODEL_MAP: dict[str, str] = {
     "orchestrator": settings.groq_model_orchestrator,
     "classifier": settings.groq_model_orchestrator,
+    "compressor": settings.groq_model_120b,
+    "rewriter": settings.groq_model_32b,
+    "tool_planner": settings.groq_model_main,
     "vision": settings.groq_model_main,
-    "rewriter": settings.groq_model_main,
-    "compressor": settings.groq_model_main,
-    "drafter": settings.groq_model_main,
-    "simple_responder": settings.groq_model_main,
+    "drafter": settings.groq_model_120b,
+    "simple_responder": settings.groq_model_32b,
     "judge": settings.groq_model_main,
 }
 
@@ -103,9 +104,27 @@ def _call_groq(
                 retry_after = float(
                     resp.headers.get("retry-after", settings.groq_backoff_base**attempt)
                 )
-                wait = retry_after + random.uniform(0, 0.5)
+                wait = min(
+                    retry_after + random.uniform(0, 0.5),
+                    settings.groq_backoff_max_sec,
+                )
                 logger.warning(
                     "Groq 429 on attempt %s/%s. Waiting %.2fs.",
+                    attempt + 1,
+                    settings.groq_max_retries,
+                    wait,
+                )
+                _time.sleep(wait)
+                continue
+
+            if resp.status_code in {502, 503, 504}:
+                wait = min(
+                    settings.groq_backoff_base**attempt + random.uniform(0, 0.5),
+                    settings.groq_backoff_max_sec,
+                )
+                logger.warning(
+                    "Groq %s on attempt %s/%s. Waiting %.2fs.",
+                    resp.status_code,
                     attempt + 1,
                     settings.groq_max_retries,
                     wait,
@@ -124,7 +143,12 @@ def _call_groq(
             if attempt == settings.groq_max_retries - 1:
                 latency_ms = int((_time.monotonic() - t0) * 1000)
                 return raw, clean, status_code, latency_ms
-            _time.sleep(settings.groq_backoff_base**attempt + random.uniform(0, 0.5))
+            _time.sleep(
+                min(
+                    settings.groq_backoff_base**attempt + random.uniform(0, 0.5),
+                    settings.groq_backoff_max_sec,
+                )
+            )
 
     latency_ms = int((_time.monotonic() - t0) * 1000)
     return raw, clean, status_code, latency_ms

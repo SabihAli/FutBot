@@ -17,14 +17,14 @@ SERVICE_ROUTES: dict[str, str] = {
     "/tools": settings.tools_service_url,
 }
 
-ACTIVE_PREFIXES = ("/auth", "/chats", "/projects", "/traces")
+ACTIVE_PREFIXES = ("/auth", "/chats", "/projects", "/traces", "/tools")
 
 NOT_IMPLEMENTED_PREFIXES = (
     "/llm",
     "/retrieve",
     "/ingest",
     "/pipeline",
-    "/tools",
+    "/tools/execute",
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[2]

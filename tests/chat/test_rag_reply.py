@@ -21,7 +21,7 @@ async def test_post_user_message_triggers_rag(chat_client, mocker):
 
     response = await chat_client.post(
         f"/chats/{chat_id}/messages",
-        json={"role": "user", "content": "Score?"},
+        json={"role": "user", "content": "Score?", "web_search_enabled": True},
     )
 
     assert response.status_code == 200

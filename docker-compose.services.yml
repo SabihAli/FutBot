@@ -38,6 +38,7 @@ services:
       INGESTION_SERVICE_URL: http://ingestion:8086
       ORCHESTRATOR_SERVICE_URL: http://rag-orchestrator:8084
       OBSERVABILITY_SERVICE_URL: http://observability:8090
+      TOOLS_SERVICE_URL: http://tools:8088
       REDIS_URL: redis://redis:6379/0
       JWT_SECRET: ${JWT_SECRET:-dev-secret-change-me}
       ANON_MESSAGE_LIMIT: ${ANON_MESSAGE_LIMIT:-10}
@@ -57,12 +58,14 @@ services:
       - .env
     environment:
       RETRIEVAL_SERVICE_URL: http://retrieval:8085
+      TOOLS_SERVICE_URL: http://tools:8088
       LLM_PROVIDER: ${LLM_PROVIDER:-local}
       GROQ_API_KEY: ${GROQ_API_KEY:-}
       TRACE_DB_PATH: /data/trace_logs.db
     depends_on:
       - retrieval
       - llm-gateway
+      - tools
     ports:
       - "8084:8084"
     volumes:
@@ -88,6 +91,7 @@ services:
       PROJECT_SERVICE_URL: http://project:8083
       LLM_GATEWAY_URL: http://llm-gateway:8087
       ORCHESTRATOR_SERVICE_URL: http://rag-orchestrator:8084
+      TOOLS_SERVICE_URL: http://tools:8088
       CONTEXT_BUDGET_TOKENS: ${CONTEXT_BUDGET_TOKENS:-8192}
       AUTO_COMPRESS_THRESHOLD_PCT: ${AUTO_COMPRESS_THRESHOLD_PCT:-85}
     depends_on:
@@ -129,6 +133,22 @@ services:
       - "8085:8085"
     volumes:
       - retrieval_data:/data
+
+  tools:
+    build:
+      context: .
+      dockerfile: services/tools/Dockerfile
+    env_file:
+      - .env
+    environment:
+      TAVILY_API_KEY: ${TAVILY_API_KEY:-}
+      SERPER_API_KEY: ${SERPER_API_KEY:-}
+      LIVESCORE_MCP_URL: ${LIVESCORE_MCP_URL:-https://livescoremcp.com/sse}
+      API_FOOTBALL_KEY: ${API_FOOTBALL_KEY:-}
+      LIVESCORE_MCP_ENABLED: ${LIVESCORE_MCP_ENABLED:-true}
+      API_FOOTBALL_MCP_ENABLED: ${API_FOOTBALL_MCP_ENABLED:-true}
+    ports:
+      - "8088:8088"
 
   ingestion:
     build:

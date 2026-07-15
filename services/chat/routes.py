@@ -186,6 +186,7 @@ async def post_message(
 
     assistant_msg: Message | None = None
     run_id: int | None = None
+    pipeline_result: dict = {}
     if body.role == "user":
         ctx = _messages_to_context(chat)
         snap = chat.snapshot.snapshot_text if chat.snapshot else ""
@@ -202,6 +203,7 @@ async def post_message(
                 snapshot=snap,
                 snapshot_turn_count=turn_count,
                 project_id=chat.project_id,
+                web_search_enabled=body.web_search_enabled,
             )
             assistant_msg = Message(
                 chat_id=chat.id,
@@ -241,6 +243,9 @@ async def post_message(
             should_compress=usage_raw["should_compress"],
             compression_pending=chat.compression_pending,
             run_id=run_id,
+            tool_notice=pipeline_result.get("tool_notice") if assistant_msg else None,
+            tool_notice_code=pipeline_result.get("tool_notice_code") if assistant_msg else None,
+            web_search_skipped=bool(pipeline_result.get("web_search_skipped")) if assistant_msg else False,
         )
     )
 
@@ -250,7 +255,7 @@ async def export_chat(
     chat_id: str,
     db: AsyncSession = Depends(get_db),
     user_id: str = Depends(require_user_id),
-    format: str = Query(default="markdown", pattern="^(markdown|json)$"),
+    format: str = Query(default="markdown", pattern="^(markdown|json|pdf)$"),
 ):
     chat = await load_chat_with_messages(db, chat_id)
     if not chat:
@@ -280,6 +285,17 @@ async def export_chat(
         lines.append(f"**{m.role.title()}**: {m.content}")
         lines.append("")
     body = "\n".join(lines)
+
+    if format == "pdf":
+        from services.chat.orchestrator_client import export_markdown_to_pdf
+
+        pdf_bytes = export_markdown_to_pdf(body, title=chat.title)
+        return Response(
+            content=pdf_bytes,
+            media_type="application/pdf",
+            headers={"Content-Disposition": f'attachment; filename="chat-{chat_id}.pdf"'},
+        )
+
     return Response(
         content=body,
         media_type="text/markdown",

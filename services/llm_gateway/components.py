@@ -13,6 +13,21 @@ from services.llm_gateway.provider import (
 )
 
 
+def build_context_text(
+    chunks: list[dict[str, Any]],
+    tool_results: list[dict[str, Any]] | None = None,
+) -> str:
+    parts: list[str] = []
+    for tr in tool_results or []:
+        payload = tr.get("result") if isinstance(tr.get("result"), dict) else tr
+        parts.append(f"[TOOL: {tr.get('tool', 'unknown')}]\n{json.dumps(payload, indent=2)}")
+    for chunk in chunks:
+        parts.append(
+            f"Source [{chunk.get('chunk_id', 'unknown')}]:\n{chunk.get('document', '')}"
+        )
+    return "\n\n".join(parts) if parts else "(no context provided)"
+
+
 class SnapshotCompressor:
     def compress_incremental(
         self,
@@ -78,9 +93,48 @@ class Orchestrator:
             iteration=iteration,
             system_prompt=system_prompt,
         ).upper()
+        if "TOOL" in classification:
+            return "TOOL"
         if "KNOWLEDGE" in classification:
             return "KNOWLEDGE"
         return "SIMPLE"
+
+
+class ToolPlanner:
+    def plan(
+        self,
+        query: str,
+        tools_catalog: str,
+        run_logger=None,
+        iteration: int = 0,
+    ) -> list[dict[str, Any]]:
+        system_prompt, user_template = get_prompt_parts("TOOL_PLANNER")
+        user_content = user_template.format(query=query, tools_catalog=tools_catalog)
+        raw = invoke_llm(
+            user_content,
+            model_name=MODEL_GENERATOR,
+            step="tool_planner",
+            run_logger=run_logger,
+            iteration=iteration,
+            system_prompt=system_prompt,
+        )
+        text = raw.strip()
+        text = re.sub(r"^```(?:json)?\s*|\s*```$", "", text, flags=re.IGNORECASE | re.MULTILINE)
+        try:
+            parsed = json.loads(text)
+            if isinstance(parsed, list):
+                return [p for p in parsed if isinstance(p, dict) and p.get("tool")]
+        except json.JSONDecodeError:
+            pass
+        match = re.search(r"\[.*\]", text, re.DOTALL)
+        if match:
+            try:
+                parsed = json.loads(match.group())
+                if isinstance(parsed, list):
+                    return [p for p in parsed if isinstance(p, dict) and p.get("tool")]
+            except json.JSONDecodeError:
+                pass
+        return []
 
 
 class DraftGenerator:
@@ -88,15 +142,11 @@ class DraftGenerator:
         self,
         query: str,
         chunks: list[dict[str, Any]],
+        tool_results: list[dict[str, Any]] | None = None,
         run_logger=None,
         iteration: int = 0,
     ) -> str:
-        context_text = "\n\n".join(
-            [
-                f"Source [{c.get('chunk_id', 'unknown')}]:\n{c.get('document', '')}"
-                for c in chunks
-            ]
-        )
+        context_text = build_context_text(chunks, tool_results)
         system_prompt, user_template = get_prompt_parts("DRAFT_GENERATOR")
         user_content = user_template.format(context_text=context_text, query=query)
         return invoke_llm(
@@ -115,10 +165,11 @@ class DecisionJudge:
         query: str,
         draft: str,
         chunks: list[dict[str, Any]],
+        tool_results: list[dict[str, Any]] | None = None,
         run_logger=None,
         iteration: int = 0,
     ) -> dict[str, str]:
-        context_text = "\n\n".join([c.get("document", "") for c in chunks])
+        context_text = build_context_text(chunks, tool_results)
         system_prompt, user_template = get_prompt_parts("DECISION_JUDGE")
         user_content = user_template.format(
             context_text=context_text, query=query, draft=draft

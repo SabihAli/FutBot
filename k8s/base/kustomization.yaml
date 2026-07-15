@@ -23,6 +23,7 @@ resources:
   - chat/deployment.yaml
   - project/deployment.yaml
   - llm-gateway/deployment.yaml
+  - tools/deployment.yaml
   - retrieval/deployment.yaml
   - ingestion/deployment.yaml
   - gateway/deployment.yaml

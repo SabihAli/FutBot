@@ -45,6 +45,7 @@ class ChatListItem(BaseModel):
 class CreateMessageRequest(BaseModel):
     role: str = Field(pattern="^(user|assistant|system)$")
     content: str = Field(min_length=1)
+    web_search_enabled: bool = False
 
 
 class MessageResponse(BaseModel):
@@ -65,3 +66,6 @@ class PostMessageResponse(BaseModel):
     should_compress: bool
     compression_pending: bool
     run_id: int | None = None
+    tool_notice: str | None = None
+    tool_notice_code: str | None = None
+    web_search_skipped: bool = False

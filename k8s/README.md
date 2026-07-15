@@ -38,4 +38,4 @@ For local dev without Kubernetes:
 docker compose -f docker-compose.infra.yml up -d
 ```
 
-Connection defaults: [`infra/.env.example`](../infra/.env.example)
+Connection defaults: [`.env.example`](../.env.example) (copy to `.env`)

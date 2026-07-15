@@ -1,0 +1,58 @@
+apiVersion: v1
+kind: Secret
+metadata:
+  name: tools-secret
+  namespace: futbot
+type: Opaque
+stringData:
+  TAVILY_API_KEY: ""
+  SERPER_API_KEY: ""
+  LIVESCORE_MCP_URL: https://livescoremcp.com/sse
+  LIVESCORE_MCP_ENABLED: "true"
+  API_FOOTBALL_MCP_ENABLED: "true"
+  API_FOOTBALL_KEY: ""
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tools
+  namespace: futbot
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: tools
+  template:
+    metadata:
+      labels:
+        app: tools
+    spec:
+      containers:
+        - name: tools
+          image: futbot-tools:local
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8088
+          envFrom:
+            - secretRef:
+                name: tools-secret
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8088
+            initialDelaySeconds: 5
+            periodSeconds: 5
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: tools
+  namespace: futbot
+spec:
+  selector:
+    app: tools
+  ports:
+    - port: 8088
+      targetPort: 8088
